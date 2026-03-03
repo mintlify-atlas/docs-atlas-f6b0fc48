@@ -1,0 +1,120 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Agent Identity Protocol",
+  "projectDescription": "Zero-trust security layer for AI agents with policy enforcement, identity attestation, and compliance-ready audit logging.",
+  "theme": "aspen",
+  "primaryColor": "#16A34A",
+  "lightColor": "#22C55E",
+  "darkColor": "#15803D",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "why-aip", "quickstart"]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/threat-model",
+              "concepts/layer-1-identity",
+              "concepts/layer-2-enforcement"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/installation",
+              "guides/writing-policies",
+              "guides/human-in-the-loop",
+              "guides/dlp-configuration",
+              "guides/audit-logging"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/local-proxy",
+              "deployment/kubernetes-sidecar",
+              "deployment/production-best-practices"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Specifications",
+            "pages": [
+              "reference/spec-v1alpha1",
+              "reference/spec-v1alpha2",
+              "reference/policy-schema"
+            ]
+          },
+          {
+            "group": "API Reference",
+            "pages": [
+              "reference/policy-yaml",
+              "reference/error-codes",
+              "reference/audit-format",
+              "reference/token-format"
+            ]
+          },
+          {
+            "group": "SDKs & Implementations",
+            "pages": [
+              "reference/go-implementation",
+              "reference/conformance-testing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Community",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "community/contributing",
+              "community/code-of-conduct",
+              "community/security-policy"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "community/faq",
+              "community/changelog",
+              "community/roadmap"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Zero-trust policy enforcement for AI agent tool calls",
+    "Cryptographic agent identity attestation with AAT tokens",
+    "Human-in-the-loop approval for sensitive operations",
+    "DLP scanning for preventing data exfiltration",
+    "Immutable audit logging for SOC 2, GDPR, HIPAA compliance",
+    "Transparent proxy for Model Context Protocol (MCP) servers",
+    "Fine-grained per-tool and per-argument authorization"
+  ],
+  "publicApiSurface": [
+    "AgentPolicy YAML schema (v1alpha1, v1alpha2)",
+    "Agent Authentication Token (AAT) format",
+    "Agent Identity Document (AID) structure",
+    "JSON-RPC error codes (-32001 Permission Denied, -32002 Human Approval Required)",
+    "HTTP validation endpoints (/v1/validate)",
+    "Audit log JSONL format",
+    "Policy signing with Ed25519",
+    "Conformance test suite (basic, full, extended, identity, server levels)",
+    "DLP pattern configuration (regex-based)",
+    "Tool rules: allow, block, ask actions"
+  ]
+}
