@@ -1,80 +1,449 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get started with AIP in under 5 minutes. Secure your first MCP tool server and see AIP block a dangerous operation."
 ---
 
-## Get started in three steps
-
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+This guide will take you from zero to a working AIP deployment in under 5 minutes. You'll secure an MCP tool server with a policy and see AIP block an unauthorized action.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+**What you'll learn:**
+- Install the AIP Go proxy
+- Write your first policy file
+- Start the AIP proxy to protect an MCP server
+- See AIP block a dangerous operation in real-time
 </Note>
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+- **Go 1.21+** installed ([download here](https://go.dev/dl/))
+- An MCP-compatible tool server (Docker MCP, Postgres MCP, or any custom MCP server)
+- Basic familiarity with YAML and command-line tools
+
+<Tip>
+Don't have an MCP server? The examples below show how to secure common tools like Docker and file system operations.
+</Tip>
+
+## Installation
+
+<Steps>
+  <Step title="Install the AIP Go Implementation">
+    The reference implementation is available as a Go package:
+
+    <CodeGroup>
+    ```bash Install from source
+    # Clone the repository
+    git clone https://github.com/openagentidentityprotocol/aip-go.git
+    cd aip-go
+
+    # Build the binary
+    go build -o aip ./cmd/aip
+
+    # Verify installation
+    ./aip --version
+    ```
+
+    ```bash Install with go install
+    # Install directly (requires Go 1.21+)
+    go install github.com/openagentidentityprotocol/aip-go/cmd/aip@latest
+
+    # Verify installation
+    aip --version
+    ```
+    </CodeGroup>
+
+    You should see output like:
+    ```
+    AIP Proxy v0.1.0 (aip.io/v1alpha1)
+    ```
+  </Step>
+
+  <Step title="Create Your First Policy File">
+    Create a file called `agent.yaml` with a restrictive read-only policy:
+
+    ```yaml agent.yaml
+    apiVersion: aip.io/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: read-only-agent
+      version: "1.0.0"
+    spec:
+      mode: enforce
+      allowed_tools:
+        - read_file
+        - list_directory
+        - git_status
+      tool_rules:
+        - tool: write_file
+          action: block
+        - tool: exec_command
+          action: block
+        - tool: delete_file
+          action: block
+    ```
+
+    <Tip>
+    **What this policy does:**
+    - Allows only safe read operations: `read_file`, `list_directory`, `git_status`
+    - Explicitly blocks dangerous operations: `write_file`, `exec_command`, `delete_file`
+    - Uses `enforce` mode to actively block violations (not just log them)
+    </Tip>
+  </Step>
+
+  <Step title="Start the AIP Proxy">
+    Now wrap your MCP server with AIP:
+
+    <CodeGroup>
+    ```bash Wrap an existing MCP server
+    # Start AIP proxy pointing to your MCP server
+    aip --policy ./agent.yaml --target "python mcp_server.py"
+    ```
+
+    ```bash Secure Docker MCP
+    # Use the built-in Docker wrapper
+    aip wrap docker --policy ./agent.yaml
+    ```
+
+    ```bash Generate Cursor IDE config
+    # Create Cursor Desktop configuration
+    aip --generate-cursor-config --policy ./agent.yaml --target "npx @mcp/server"
+    ```
+    </CodeGroup>
+
+    You should see:
+    ```
+    [AIP] Policy loaded: read-only-agent (v1.0.0)
+    [AIP] Mode: enforce
+    [AIP] Allowed tools: 3
+    [AIP] Proxy started on stdio transport
+    [AIP] Target: python mcp_server.py
+    ```
+  </Step>
+</Steps>
+
+## See AIP in Action
+
+Now let's test the policy by attempting both allowed and blocked operations.
+
+<Steps>
+  <Step title="Test an Allowed Operation">
+    Try a safe read operation:
+
+    ```json Request
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "tools/call",
+      "params": {
+        "name": "read_file",
+        "arguments": {
+          "path": "/tmp/test.txt"
+        }
+      }
+    }
+    ```
+
+    **Result:** ✅ Request passes through to the MCP server.
+
+    ```json Response
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "content": "File contents here..."
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Test a Blocked Operation">
+    Now try a dangerous write operation:
+
+    ```json Request
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "tools/call",
+      "params": {
+        "name": "write_file",
+        "arguments": {
+          "path": "/tmp/test.txt",
+          "content": "malicious data"
+        }
+      }
+    }
+    ```
+
+    **Result:** 🔴 AIP blocks the request.
+
+    ```json Response
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "error": {
+        "code": -32001,
+        "message": "Permission Denied: Tool 'write_file' is not allowed by policy"
+      }
+    }
+    ```
+
+    <Warning>
+    **Your MCP server never received this request.** The dangerous operation was blocked at the AIP proxy layer before reaching your infrastructure.
+    </Warning>
+  </Step>
+
+  <Step title="Check the Audit Log">
+    Every decision is logged to `aip-audit.jsonl`:
+
+    ```bash
+    cat aip-audit.jsonl | jq .
+    ```
+
+    You'll see structured audit events:
+
+    ```json
+    {
+      "timestamp": "2026-03-03T10:15:30Z",
+      "policy": "read-only-agent",
+      "tool": "write_file",
+      "decision": "BLOCK",
+      "violation": true,
+      "error_code": -32001,
+      "arguments": {
+        "path": "/tmp/test.txt"
+      }
+    }
+    ```
+
+    <Tip>
+    Filter for violations only:
+    ```bash
+    cat aip-audit.jsonl | jq 'select(.violation == true)'
+    ```
+    </Tip>
+  </Step>
+</Steps>
+
+## Example Policies
+
+Here are real-world policy examples for common use cases:
+
+### Prompt Injection Defense
+
+Protect against the GeminiJack attack class:
+
+```yaml gemini-jack-defense.yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: gemini-jack-defense
+spec:
+  mode: enforce
+  allowed_tools:
+    - read_file
+    - search_code
+  tool_rules:
+    # Block all external communication
+    - tool: send_email
+      action: block
+    - tool: post_slack
+      action: block
+    - tool: http_request
+      action: block
+    
+    # Block file system writes
+    - tool: write_file
+      action: block
+    - tool: exec_command
+      action: block
+  
+  dlp:
+    patterns:
+      - name: "Exfil URL"
+        regex: "https?://[a-zA-Z0-9.-]+\\.(ngrok|requestbin|pipedream)"
+```
+
+### Database Read-Only Access
+
+Restrict SQL operations to SELECT queries only:
+
+```yaml postgres-readonly.yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: postgres-readonly
+spec:
+  mode: enforce
+  tool_rules:
+    - tool: postgres_query
+      action: allow
+      allow_args:
+        query: "^SELECT\\s+.*"  # Only SELECT queries
+  
+  dlp:
+    patterns:
+      - name: "SSN"
+        regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+      - name: "Credit Card"
+        regex: "\\b(?:\\d{4}[- ]?){3}\\d{4}\\b"
+```
+
+### Human-in-the-Loop for Sensitive Operations
+
+Require user approval for destructive actions:
+
+```yaml human-approval.yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: human-approval-required
+spec:
+  mode: enforce
+  allowed_tools:
+    - github_get_repo
+    - github_list_pulls
+  tool_rules:
+    - tool: github_create_pr
+      action: ask  # Native OS approval dialog
+    - tool: github_merge_pr
+      action: ask
+    - tool: github_delete_repo
+      action: block  # Never allowed
+```
+
+### DLP Scanning for Secrets
+
+Prevent accidental exposure of sensitive data:
+
+```yaml dlp-scanning.yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: dlp-scanning
+spec:
+  mode: enforce
+  allowed_tools:
+    - read_file
+    - search_files
+  dlp:
+    patterns:
+      - name: "AWS Key"
+        regex: "(AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}"
+      - name: "GitHub Token"
+        regex: "ghp_[a-zA-Z0-9]{36}"
+      - name: "Private Key"
+        regex: "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+```
+
+When a secret is detected, it's redacted:
+
+```
+Before: "Your key is AKIAIOSFODNN7EXAMPLE"
+After:  "Your key is [REDACTED:AWS Key]"
+```
+
+## Testing in Monitor Mode
+
+Before enforcing a new policy in production, test it with `monitor` mode:
+
+```yaml test-policy.yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: test-policy
+spec:
+  mode: monitor  # Log violations but don't block
+  allowed_tools:
+    - safe_tool
+```
+
+<Note>
+**Monitor mode behavior:**
+- Policy violations are logged to `aip-audit.jsonl`
+- Requests are **allowed through** even if they violate policy
+- Use this to test new policies without breaking production workflows
+</Note>
+
+Review the audit log to see what would have been blocked:
+
+```bash
+cat aip-audit.jsonl | jq 'select(.violation == true)'
+```
+
+Once confident, change `mode: monitor` to `mode: enforce`.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Policy Reference" icon="book" href="/reference/policy-yaml">
+    Complete YAML schema, validation rules, and advanced examples
+  </Card>
+  <Card title="Architecture Deep Dive" icon="diagram-project" href="/concepts/architecture">
+    Understand Layer 1 (Identity) and Layer 2 (Enforcement)
+  </Card>
+  <Card title="Core Concepts" icon="lightbulb" href="/concepts/layer-1-identity">
+    Learn about AATs, registries, and the two-layer model
+  </Card>
+  <Card title="AIP Specification" icon="file-code" href="/reference/spec-v1alpha1">
+    Formal protocol definition for implementers
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Policy validation fails at startup">
+    Common causes:
+    - Invalid `apiVersion` (must be `aip.io/v1alpha1`)
+    - Empty `allowed_tools` with no `tool_rules`
+    - Invalid regex in `allow_args`
+
+    Run validation:
+    ```bash
+    aip --policy ./agent.yaml --validate
+    ```
+  </Accordion>
+
+  <Accordion title="All requests are blocked">
+    Check your policy:
+    - Ensure `mode: enforce` is intentional (use `monitor` for testing)
+    - Verify tool names exactly match what your MCP server reports
+    - Check audit log for the actual tool names being called
+
+    Enable verbose logging:
+    ```bash
+    aip --policy ./agent.yaml --target "..." --verbose
+    ```
+  </Accordion>
+
+  <Accordion title="DLP patterns not matching">
+    - Regex must use double-escaped backslashes in YAML: `\\d` not `\d`
+    - Test regex patterns outside AIP first
+    - Check the audit log for `dlp_events` to see what was scanned
+  </Accordion>
+
+  <Accordion title="Human-in-the-loop dialogs not appearing">
+    - Ensure `action: ask` is set in `tool_rules`
+    - On Linux, requires a display server (X11/Wayland)
+    - On macOS, requires terminal to have accessibility permissions
+    - Check AIP logs for "approval prompt sent"
+  </Accordion>
+</AccordionGroup>
+
+## Get Help
+
+<CardGroup cols={2}>
+  <Card title="GitHub Discussions" icon="github" href="https://github.com/ArangoGutierrez/agent-identity-protocol/discussions">
+    Ask questions and share your AIP setup
+  </Card>
+  <Card title="Report Issues" icon="bug" href="https://github.com/ArangoGutierrez/agent-identity-protocol/issues">
+    Found a bug? Let us know
+  </Card>
+  <Card title="FAQ" icon="circle-question" href="/community/faq">
+    Common questions answered
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="https://github.com/ArangoGutierrez/agent-identity-protocol/blob/main/CONTRIBUTING.md">
+    Help build AIP
+  </Card>
+</CardGroup>

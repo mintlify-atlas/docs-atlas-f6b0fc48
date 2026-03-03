@@ -1,0 +1,532 @@
+---
+title: "Kubernetes Sidecar Deployment"
+description: "Deploy AIP as a sidecar container to secure agents running in Kubernetes clusters with NetworkPolicy integration and centralized audit logging"
+---
+
+Kubernetes sidecar deployment is the production-ready pattern for running AIP alongside your agent workloads. The AIP proxy runs as a sidecar container in the same pod as your agent, intercepting MCP traffic before it reaches external tool servers.
+
+This is the **"Istio for AI Agents"** — bringing service mesh-style security to agentic workloads.
+
+<Note>
+  **Roadmap Status**: Kubernetes sidecar is part of **v0.2** and is currently under development. The Helm chart and official container images are planned for release in Q2 2026. This guide reflects the planned architecture.
+</Note>
+
+## Architecture Overview
+
+In Kubernetes sidecar mode:
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Agent Pod                        │
+│                                                     │
+│  ┌──────────────┐         ┌──────────────┐        │
+│  │              │  stdio  │              │        │
+│  │  AI Agent    │────────▶│  AIP Proxy   │        │
+│  │  Container   │◀────────│  (Sidecar)   │        │
+│  │              │         │              │        │
+│  └──────────────┘         └──────┬───────┘        │
+│                                   │                │
+└───────────────────────────────────┼────────────────┘
+                                    │ NetworkPolicy enforced
+                                    ▼
+                          ┌──────────────────┐
+                          │  External MCP    │
+                          │  Tool Servers    │
+                          │  (GitHub, Docker)│
+                          └──────────────────┘
+```
+
+### Key Benefits
+
+- **Zero application changes**: Agent code doesn't need to be AIP-aware
+- **NetworkPolicy integration**: Sidecar enforces egress rules at the network layer
+- **Centralized audit logs**: All decisions streamed to a central collector
+- **Policy as ConfigMap**: Update policies without redeploying agents
+- **High availability**: Sidecar scales with your agent pods
+
+## Installation
+
+### Prerequisites
+
+- Kubernetes 1.24+
+- Helm 3.8+
+- NetworkPolicy support (Calico, Cilium, or Antrea)
+- Optional: Prometheus for metrics
+
+### Helm Chart Installation
+
+<Steps>
+  <Step title="Add the AIP Helm repository">
+    ```bash
+    helm repo add aip https://helm.agentidentityprotocol.io
+    helm repo update
+    ```
+  </Step>
+
+  <Step title="Create a namespace for AIP components">
+    ```bash
+    kubectl create namespace aip-system
+    ```
+  </Step>
+
+  <Step title="Install the AIP operator">
+    The operator watches for `AgentPolicy` custom resources and injects sidecars automatically:
+
+    ```bash
+    helm install aip-operator aip/aip-operator \
+      --namespace aip-system \
+      --set prometheus.enabled=true
+    ```
+
+    Verify installation:
+    ```bash
+    kubectl get pods -n aip-system
+    # Expected output:
+    # NAME                            READY   STATUS    RESTARTS   AGE
+    # aip-operator-7d4b8c9f5d-x7k2p   1/1     Running   0          30s
+    ```
+  </Step>
+
+  <Step title="Deploy an AgentPolicy CRD">
+    Create a policy for your agent:
+
+    ```yaml agent-policy.yaml
+    apiVersion: aip.io/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: github-agent-policy
+      namespace: default
+    spec:
+      mode: enforce
+      allowed_tools:
+        - github_get_repo
+        - github_list_pulls
+        - github_get_issue
+      tool_rules:
+        - tool: github_create_pull
+          action: ask  # Requires human approval
+        - tool: github_delete_repo
+          action: block
+      dlp:
+        patterns:
+          - name: "GitHub Token"
+            regex: "ghp_[a-zA-Z0-9]{36}"
+          - name: "AWS Key"
+            regex: "AKIA[A-Z0-9]{16}"
+    ```
+
+    Apply the policy:
+    ```bash
+    kubectl apply -f agent-policy.yaml
+    ```
+  </Step>
+
+  <Step title="Annotate your agent deployment">
+    Add the AIP sidecar injection annotation to your agent pod spec:
+
+    ```yaml agent-deployment.yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: github-agent
+      namespace: default
+    spec:
+      replicas: 3
+      template:
+        metadata:
+          annotations:
+            aip.io/inject: "true"
+            aip.io/policy: "github-agent-policy"
+        spec:
+          containers:
+            - name: agent
+              image: myorg/github-agent:v1.2.0
+              env:
+                - name: MCP_SERVER
+                  value: "http://localhost:9090"  # AIP proxy
+    ```
+
+    Deploy:
+    ```bash
+    kubectl apply -f agent-deployment.yaml
+    ```
+
+    The operator automatically injects the AIP sidecar container.
+  </Step>
+</Steps>
+
+## Sidecar Configuration
+
+The injected sidecar container has the following default configuration:
+
+```yaml
+containers:
+  - name: aip-proxy
+    image: ghcr.io/openagentidentityprotocol/aip-proxy:v0.2.0
+    ports:
+      - containerPort: 9090  # MCP proxy port
+      - containerPort: 9091  # Metrics port
+    env:
+      - name: AIP_POLICY_PATH
+        value: "/etc/aip/policy.yaml"
+      - name: AIP_AUDIT_LOG
+        value: "/var/log/aip/audit.jsonl"
+      - name: AIP_VERBOSE
+        value: "false"
+    volumeMounts:
+      - name: aip-policy
+        mountPath: /etc/aip
+        readOnly: true
+      - name: aip-logs
+        mountPath: /var/log/aip
+volumes:
+  - name: aip-policy
+    configMap:
+      name: github-agent-policy
+  - name: aip-logs
+    emptyDir: {}
+```
+
+### Customizing Sidecar Resources
+
+Override resource limits via Helm values:
+
+```yaml values.yaml
+sidecar:
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "100m"
+    limits:
+      memory: "128Mi"
+      cpu: "200m"
+  image:
+    repository: ghcr.io/openagentidentityprotocol/aip-proxy
+    tag: "v0.2.0"
+    pullPolicy: IfNotPresent
+```
+
+Apply custom values:
+```bash
+helm upgrade aip-operator aip/aip-operator \
+  --namespace aip-system \
+  -f values.yaml
+```
+
+## NetworkPolicy Integration
+
+The AIP sidecar integrates with Kubernetes NetworkPolicy to enforce egress rules at the network layer.
+
+### Example: Restrict Outbound Traffic
+
+Create a NetworkPolicy that only allows the sidecar to communicate with approved MCP servers:
+
+```yaml networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: github-agent-egress
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: github-agent
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    
+    # Allow access to GitHub API (via AIP policy approval)
+    - to:
+        - ipBlock:
+            cidr: 140.82.112.0/20  # GitHub IP range
+      ports:
+        - protocol: TCP
+          port: 443
+    
+    # Block all other egress
+```
+
+Apply:
+```bash
+kubectl apply -f networkpolicy.yaml
+```
+
+<Warning>
+  NetworkPolicy egress rules are **fail-closed**. If you block outbound traffic, ensure DNS and essential services are whitelisted.
+</Warning>
+
+### Combining AIP Policy + NetworkPolicy
+
+For defense-in-depth:
+
+1. **AIP policy** controls *which tools* can be called and *validates arguments*
+2. **NetworkPolicy** controls *which network destinations* are reachable
+
+Example: Allow GitHub read operations via AIP, but block network access to `github.com/repos/*/delete` at the firewall level.
+
+## Centralized Audit Logging
+
+Stream audit logs from all sidecar instances to a central collector.
+
+### Fluentd Collector
+
+Deploy Fluentd as a DaemonSet to collect sidecar logs:
+
+```yaml fluentd-daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd-aip
+  namespace: aip-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: fluentd
+          image: fluent/fluentd-kubernetes-daemonset:v1-debian-elasticsearch
+          env:
+            - name: FLUENT_ELASTICSEARCH_HOST
+              value: "elasticsearch.logging.svc.cluster.local"
+            - name: FLUENT_ELASTICSEARCH_PORT
+              value: "9200"
+          volumeMounts:
+            - name: varlog
+              mountPath: /var/log
+      volumes:
+        - name: varlog
+          hostPath:
+            path: /var/log
+```
+
+### Log Forwarding to S3
+
+For compliance, forward audit logs to immutable storage:
+
+```yaml
+sidecar:
+  auditLog:
+    enabled: true
+    destination: "s3://my-bucket/aip-audit/"
+    rotation: "daily"
+    retention: "7y"  # SOC 2 / GDPR requirement
+```
+
+### Querying Audit Logs
+
+Example Elasticsearch query for blocked requests:
+
+```json
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "decision": "BLOCK" } },
+        { "range": { "timestamp": { "gte": "now-1h" } } }
+      ]
+    }
+  }
+}
+```
+
+## Prometheus Metrics
+
+The sidecar exposes Prometheus metrics on port `9091`:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `aip_requests_total` | Counter | Total MCP requests processed |
+| `aip_policy_decisions{decision}` | Counter | Decisions by type (ALLOW, BLOCK, ASK) |
+| `aip_policy_violations_total` | Counter | Policy violations detected |
+| `aip_dlp_redactions_total{rule}` | Counter | DLP redactions by rule name |
+| `aip_request_duration_seconds` | Histogram | Policy evaluation latency |
+
+### Prometheus ServiceMonitor
+
+Configure Prometheus to scrape sidecar metrics:
+
+```yaml servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: aip-sidecar
+  namespace: aip-system
+spec:
+  selector:
+    matchLabels:
+      app: aip-proxy
+  endpoints:
+    - port: metrics
+      interval: 30s
+```
+
+### Grafana Dashboard
+
+Import the AIP Grafana dashboard:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/openagentidentityprotocol/aip-go/main/deploy/grafana-dashboard.json
+```
+
+Dashboard panels:
+- Request rate by agent
+- Block rate by tool
+- DLP redaction heatmap
+- Policy evaluation latency (p50, p95, p99)
+
+## High Availability
+
+### Sidecar Resilience
+
+The sidecar is designed to fail-closed:
+
+```yaml
+sidecar:
+  failureMode: "closed"  # Block requests if sidecar crashes
+  healthCheck:
+    enabled: true
+    endpoint: "/healthz"
+    initialDelaySeconds: 5
+    periodSeconds: 10
+```
+
+### Policy Updates Without Downtime
+
+Update policies via ConfigMap:
+
+```bash
+# Update policy
+kubectl edit configmap github-agent-policy
+
+# Sidecar automatically reloads (no restart needed)
+kubectl logs -l app=github-agent -c aip-proxy
+# [INFO] Policy reloaded: github-agent-policy (v1.1.0)
+```
+
+<Tip>
+  Use versioning in policy metadata to track changes:
+  ```yaml
+  metadata:
+    version: "1.1.0"
+  ```
+</Tip>
+
+## Multi-Tenancy
+
+Isolate policies per namespace:
+
+```yaml
+# Team A namespace
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: team-a-policy
+  namespace: team-a
+spec:
+  allowed_tools:
+    - github_get_repo
+
+---
+# Team B namespace (stricter)
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: team-b-policy
+  namespace: team-b
+spec:
+  allowed_tools:
+    - github_get_repo
+  tool_rules:
+    - tool: github_get_repo
+      allow_args:
+        org: "^team-b-.*"  # Only repos in team-b org
+```
+
+The operator enforces namespace-scoped policies automatically.
+
+## Troubleshooting
+
+### Sidecar not injected
+
+**Symptom**: Agent pod runs without AIP sidecar
+
+**Diagnosis**:
+```bash
+kubectl get pods -l app=github-agent -o jsonpath='{.items[0].spec.containers[*].name}'
+# Expected: agent aip-proxy
+```
+
+**Fix**: Check annotation on pod template:
+```yaml
+annotations:
+  aip.io/inject: "true"
+  aip.io/policy: "github-agent-policy"
+```
+
+### Policy not loading
+
+**Symptom**: Sidecar logs show `failed to load policy`
+
+**Diagnosis**:
+```bash
+kubectl logs -l app=github-agent -c aip-proxy | grep ERROR
+```
+
+**Fix**: Validate policy YAML:
+```bash
+kubectl apply --dry-run=client -f agent-policy.yaml
+```
+
+### NetworkPolicy blocking DNS
+
+**Symptom**: MCP server can't resolve external hostnames
+
+**Fix**: Add DNS egress rule:
+```yaml
+egress:
+  - to:
+      - namespaceSelector:
+          matchLabels:
+            name: kube-system
+    ports:
+      - protocol: UDP
+        port: 53
+```
+
+## Roadmap and Future Features
+
+<Note>
+  The following features are planned for **v0.2** and beyond:
+</Note>
+
+- **SPIFFE/SPIRE integration**: Workload identity federation
+- **OPA policy engine**: Replace YAML with Rego for complex authorization
+- **mTLS between sidecar and MCP servers**: Encrypted MCP traffic
+- **Admission controller**: Block pods without AIP sidecar in production namespaces
+- **Auto-scaling based on agent load**: HPA for sidecar resource limits
+
+Track progress in the [AIP Roadmap](https://github.com/openagentidentityprotocol/aip-go/issues).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Production Best Practices" icon="shield-check" href="/deployment/production-best-practices">
+    Security hardening and operational guidelines
+  </Card>
+  <Card title="Policy Reference" icon="file-code" href="/reference/policy-yaml">
+    Complete YAML schema and examples
+  </Card>
+  <Card title="Local Development" icon="laptop-code" href="/deployment/local-proxy">
+    Test policies locally before deploying to Kubernetes
+  </Card>
+  <Card title="Monitoring Guide" icon="chart-line">
+    Observability, metrics, and alerting (coming soon)
+  </Card>
+</CardGroup>

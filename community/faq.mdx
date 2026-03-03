@@ -1,0 +1,258 @@
+---
+title: "Frequently Asked Questions"
+description: "Common questions about the Agent Identity Protocol"
+---
+
+## General
+
+<AccordionGroup>
+  <Accordion title="What is AIP?">
+    AIP (Agent Identity Protocol) is an open standard for secure agentic identity management and authorization. It defines how to declare, enforce, and audit what actions an AI agent can perform.
+    
+    Think of it as IAM (Identity and Access Management) specifically designed for AI agents.
+  </Accordion>
+  
+  <Accordion title="What's the difference between the AIP specification and the Go proxy?">
+    - **AIP Specification** (`spec/`): The protocol standard that anyone can implement
+    - **Go Proxy** (`implementations/go-proxy/`): One reference implementation of that standard
+    
+    Think of it like HTTP (the spec) vs Apache/Nginx (implementations). The specification defines the standard, while implementations provide working software.
+  </Accordion>
+  
+  <Accordion title="Can I use AIP without the Go proxy?">
+    Yes! AIP is a specification. You can:
+    - Implement AIP natively in your MCP client (Cursor, Claude Desktop, etc.)
+    - Build your own proxy in any language
+    - Use the Go proxy as a reference
+    
+    The specification is open and language-agnostic.
+  </Accordion>
+  
+  <Accordion title="Does AIP require changes to my MCP server?">
+    No. AIP sits between the MCP client and server as a transparent proxy. Your MCP server doesn't need any modifications.
+    
+    ```
+    [Agent] → [AIP Proxy] → [MCP Server]
+    ```
+    
+    The proxy intercepts `tools/call` requests, applies policy, and forwards allowed requests unchanged.
+  </Accordion>
+  
+  <Accordion title="What's the difference between v1alpha1 and v1alpha2?">
+    v1alpha2 adds robust security features for production deployments:
+    - **Identity Tokens**: Cryptographic session binding and replay prevention
+    - **Server-Side Validation**: Centralized policy enforcement via HTTP
+    - **Policy Signatures**: Integrity verification for policy files
+    - **Tool Schema Hashing**: Protection against tool poisoning
+    
+    For local development, v1alpha1 is sufficient. For production, use v1alpha2.
+  </Accordion>
+  
+  <Accordion title="Do I need identity tokens?">
+    Not for local development. Identity tokens are recommended when:
+    - You run agents in a multi-tenant environment
+    - You need to audit *who* (which session) performed an action, not just *what* happened
+    - You are using the centralized AIP Server
+  </Accordion>
+</AccordionGroup>
+
+## Security
+
+<AccordionGroup>
+  <Accordion title="How is AIP different from workforce AI governance tools like SurePath.ai?">
+    AIP and workforce AI governance tools solve different problems at different layers:
+    
+    **Workforce AI Governance (e.g., SurePath.ai)**:
+    - Monitors *employee* AI usage across your organization
+    - Network/application level visibility
+    - Answers: "Who in my org is using ChatGPT? What are they asking?"
+    - Typically SaaS platforms for compliance and governance
+    
+    **AIP (Agent Identity Protocol)**:
+    - Controls *what actions AI agents can take* on your infrastructure
+    - Tool-call level authorization (blocks dangerous operations)
+    - Answers: "Can this agent delete files? Access production databases?"
+    - Open protocol for developers building agents
+    
+    **These are complementary**: Use workforce governance to monitor employee AI usage. Use AIP to secure the agents those employees build.
+  </Accordion>
+  
+  <Accordion title="How is AIP different from OAuth?">
+    | Aspect | OAuth | AIP |
+    |--------|-------|-----|
+    | Granularity | Scope-level ("repo access") | Action-level ("repos.get with org:X") |
+    | Timing | Grant-time | Runtime (every call) |
+    | Audience | End users | Developers/Security teams |
+    | Format | Token claims | YAML policy files |
+    
+    OAuth answers "who is this?" — AIP answers "should this specific action be allowed?"
+  </Accordion>
+  
+  <Accordion title="Can AIP prevent all prompt injection attacks?">
+    AIP significantly reduces the blast radius of prompt injection by:
+    - Limiting which tools an agent can call
+    - Validating arguments with regex patterns
+    - Requiring human approval for sensitive operations
+    - Logging all decisions for forensic analysis
+    
+    However, AIP cannot prevent prompt injection itself—it mitigates the *consequences*. Think of it as defense-in-depth: even if an attacker hijacks the agent, they can't execute dangerous operations.
+  </Accordion>
+  
+  <Accordion title="What about network egress? Can a malicious agent exfiltrate data?">
+    Network egress control is planned for AIP v1beta1. Currently, tool-level authorization is enforced but the MCP server subprocess can still make network calls.
+    
+    For maximum security today, run MCP servers in containers with `--network=none`.
+  </Accordion>
+  
+  <Accordion title="Are audit logs tamper-proof?">
+    Audit logs are append-only from the agent's perspective (the agent doesn't have write access to the log file). 
+    
+    For production use, forward logs to an external SIEM or use signed logging for cryptographic verification.
+  </Accordion>
+</AccordionGroup>
+
+## Policy
+
+<AccordionGroup>
+  <Accordion title="Where do I put my policy file?">
+    Anywhere you like. Common locations:
+    - `~/.config/aip/policy.yaml` (user config)
+    - `./agent.yaml` (project root)
+    - `/etc/aip/policy.yaml` (system-wide)
+    
+    Pass the path with `--policy /path/to/policy.yaml`.
+  </Accordion>
+  
+  <Accordion title="What happens if a tool isn't in allowed_tools?">
+    It's blocked with error code `-32001 Forbidden`. AIP is **default-deny**.
+    
+    This fail-closed design ensures that unknown or undeclared tools are automatically rejected.
+  </Accordion>
+  
+  <Accordion title="Can I test a policy without blocking anything?">
+    Yes! Use monitor mode:
+    
+    ```yaml
+    spec:
+      mode: monitor  # Log violations but don't block
+    ```
+    
+    Check the audit log to see what *would* have been blocked. This is useful for testing policies before enforcing them.
+  </Accordion>
+  
+  <Accordion title="How do I allow a tool but require approval?">
+    Use `action: ask`:
+    
+    ```yaml
+    tool_rules:
+      - tool: deploy_production
+        action: ask  # Shows native OS dialog
+    ```
+    
+    This triggers a human-in-the-loop approval dialog before the tool call proceeds.
+  </Accordion>
+  
+  <Accordion title="Can I validate tool arguments?">
+    Yes, with regex patterns:
+    
+    ```yaml
+    tool_rules:
+      - tool: postgres_query
+        allow_args:
+          query: "^SELECT\\s+.*"  # Only SELECT queries
+    ```
+    
+    This allows fine-grained control over what arguments an agent can pass to a tool.
+  </Accordion>
+  
+  <Accordion title="How do I set up server-side validation?">
+    1. Enable `spec.server` in your policy
+    2. Configure TLS (required for non-localhost)
+    3. Set `failover_mode` (recommend `fail_closed` for security)
+    
+    See the [Server-Side Validation Guide](https://github.com/ArangoGutierrez/agent-identity-protocol/blob/main/implementations/go-proxy/docs/server-guide.md) for details.
+  </Accordion>
+</AccordionGroup>
+
+## Implementation
+
+<AccordionGroup>
+  <Accordion title="My Docker container doesn't stop when I kill the proxy!">
+    When wrapping a Docker container with AIP, signals (SIGTERM/SIGINT) are sent to the `docker` CLI process, not the container itself. This can leave zombie containers running.
+    
+    **Solution:** Always use `--rm` and `--init` flags:
+    
+    ```bash
+    # Bad - container may not receive signals
+    aip --policy policy.yaml --target "docker run myimage"
+    
+    # Good - proper signal handling and cleanup
+    aip --policy policy.yaml --target "docker run --rm --init -i myimage"
+    ```
+    
+    | Flag | Purpose |
+    |------|--------|
+    | `--rm` | Automatically remove container when it exits |
+    | `--init` | Run init process (tini) that forwards signals properly |
+    | `-i` | Keep stdin open for JSON-RPC communication |
+  </Accordion>
+  
+  <Accordion title="What MCP clients work with AIP?">
+    Any MCP client that supports custom server commands:
+    - **Cursor**: Add to `~/.cursor/mcp.json`
+    - **Claude Desktop**: Add to `claude_desktop_config.json`
+    - **Continue (VS Code)**: Add to Continue config
+    - **Custom clients**: Use AIP as the server command
+    
+    The AIP proxy is client-agnostic and works with any MCP-compatible client.
+  </Accordion>
+  
+  <Accordion title="Does AIP work on Windows?">
+    Yes! The Go proxy builds for Windows. Human-in-the-loop (`action: ask`) uses native Windows dialogs via PowerShell.
+  </Accordion>
+  
+  <Accordion title="How do I debug policy issues?">
+    1. Enable verbose mode: `--verbose`
+    2. Check stderr for policy decisions
+    3. Review the audit log: `cat aip-audit.jsonl | jq .`
+    4. Use monitor mode to test without blocking
+    
+    The audit log contains complete information about every policy decision, including why a request was allowed or denied.
+  </Accordion>
+  
+  <Accordion title="What's the performance overhead?">
+    Minimal. The proxy adds:
+    - ~1-5ms per request for policy evaluation
+    - Negligible memory overhead (policies are loaded once)
+    
+    JSON-RPC parsing and regex matching are fast operations. For most use cases, the overhead is imperceptible.
+  </Accordion>
+</AccordionGroup>
+
+## Contributing
+
+<AccordionGroup>
+  <Accordion title="How do I report a security vulnerability?">
+    See our [Security Policy](/community/security-policy) for responsible disclosure instructions.
+    
+    **Do not file public GitHub issues for security vulnerabilities.**
+  </Accordion>
+  
+  <Accordion title="Can I contribute a new implementation?">
+    Yes! We welcome implementations in other languages. Requirements:
+    - Pass the conformance test suite (`spec/conformance/`)
+    - Document your implementation
+    - Submit a PR to be listed in the registry
+    
+    See [Contributing](/community/contributing) for details.
+  </Accordion>
+  
+  <Accordion title="How do I propose changes to the specification?">
+    1. Open an issue describing the change
+    2. Discuss with maintainers
+    3. Submit a PR to `spec/AIP-v1alpha1.md`
+    4. Include conformance tests for new behavior
+    
+    Specification changes require community consensus and backward compatibility consideration.
+  </Accordion>
+</AccordionGroup>

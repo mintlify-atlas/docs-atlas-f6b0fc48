@@ -1,0 +1,494 @@
+---
+title: Audit Logging
+description: Configure compliance-ready audit trails for agent actions
+---
+
+AIP provides immutable audit logging for every policy decision and agent action. This guide shows you how to configure, query, and use audit logs for compliance.
+
+## Overview
+
+AIP writes structured audit logs in JSONL (JSON Lines) format. Every authorization decision, human approval, and DLP violation is recorded with:
+
+- Timestamp (RFC3339)
+- Agent identity
+- User binding
+- Tool name and arguments
+- Policy decision (allow/deny/ask)
+- Reason for decision
+- DLP matches (if any)
+
+## Log Location
+
+By default, audit logs are written to:
+
+```
+./aip-audit.jsonl
+```
+
+Configure a custom path:
+
+```bash
+aip --target "python mcp_server.py" --policy ./agent.yaml --audit-log /var/log/aip/audit.jsonl
+```
+
+## Log Format
+
+Each log entry is a single JSON object per line:
+
+```json
+{
+  "timestamp": "2026-03-03T16:32:00Z",
+  "event_type": "authorization_decision",
+  "agent_id": "agent-abc123",
+  "user": "user@example.com",
+  "tool": "write_file",
+  "arguments": {"path": "/etc/config.yaml", "content": "..."},
+  "decision": "deny",
+  "reason": "tool not in allowed_tools",
+  "policy_version": "1.0.0"
+}
+```
+
+## Event Types
+
+### 1. Authorization Decision
+
+Logged for every `tools/call` request:
+
+```json
+{
+  "event_type": "authorization_decision",
+  "timestamp": "2026-03-03T16:32:00Z",
+  "agent_id": "agent-abc123",
+  "user": "user@example.com",
+  "tool": "read_file",
+  "arguments": {"path": "/home/user/document.txt"},
+  "decision": "allow",
+  "reason": "matched allowed_tools",
+  "policy_version": "1.0.0"
+}
+```
+
+<ParamField path="event_type" type="string">
+  Always `"authorization_decision"` for tool calls.
+</ParamField>
+
+<ParamField path="decision" type="string">
+  One of: `allow`, `deny`, `ask`.
+</ParamField>
+
+<ParamField path="reason" type="string">
+  Human-readable explanation for the decision.
+</ParamField>
+
+### 2. Human Approval
+
+Logged when `action: ask` requires user approval:
+
+```json
+{
+  "event_type": "authorization_decision",
+  "timestamp": "2026-03-03T16:45:00Z",
+  "tool": "write_file",
+  "decision": "allow",
+  "reason": "human approved",
+  "human_decision": {
+    "approved": true,
+    "response_time_ms": 3420,
+    "dialog_shown_at": "2026-03-03T16:44:56.580Z"
+  }
+}
+```
+
+<ParamField path="human_decision" type="object">
+  Present when a human approval dialog was shown.
+</ParamField>
+
+### 3. DLP Match
+
+Logged when sensitive data is detected:
+
+```json
+{
+  "event_type": "dlp_match",
+  "timestamp": "2026-03-03T17:00:00Z",
+  "tool": "read_file",
+  "pattern": "AWS Access Key",
+  "match_count": 1,
+  "redacted": true,
+  "arguments": {"path": "/home/user/.env"}
+}
+```
+
+<ParamField path="pattern" type="string">
+  Name of the DLP pattern that matched.
+</ParamField>
+
+<ParamField path="match_count" type="number">
+  Number of times the pattern matched in the response.
+</ParamField>
+
+<ParamField path="redacted" type="boolean">
+  Whether the sensitive data was redacted before returning to the agent.
+</ParamField>
+
+### 4. Identity Events (v1alpha2)
+
+Logged for agent authentication and token events:
+
+```json
+{
+  "event_type": "identity_token_issued",
+  "timestamp": "2026-03-03T15:00:00Z",
+  "agent_id": "agent-abc123",
+  "user": "user@example.com",
+  "token_id": "token-xyz789",
+  "expires_at": "2026-03-03T16:00:00Z"
+}
+```
+
+## Querying Logs
+
+### Using `jq`
+
+Query structured logs with `jq`:
+
+```bash
+# All denied requests
+cat aip-audit.jsonl | jq 'select(.decision == "deny")'
+
+# DLP violations in the last hour
+cat aip-audit.jsonl | jq 'select(.event_type == "dlp_match" and (.timestamp | fromdateiso8601) > (now - 3600))'
+
+# Human approvals
+cat aip-audit.jsonl | jq 'select(.human_decision.approved == true)'
+
+# Specific tool usage
+cat aip-audit.jsonl | jq 'select(.tool == "write_file")'
+
+# Count decisions by type
+cat aip-audit.jsonl | jq -s 'group_by(.decision) | map({decision: .[0].decision, count: length})'
+```
+
+### Using `grep`
+
+Simple text search:
+
+```bash
+# Find all AWS key violations
+grep '"AWS Access Key"' aip-audit.jsonl
+
+# Find denials for a specific user
+grep '"user@example.com"' aip-audit.jsonl | grep '"deny"'
+```
+
+## Log Rotation
+
+Rotate logs to prevent unbounded growth:
+
+### Using `logrotate` (Linux)
+
+Create `/etc/logrotate.d/aip`:
+
+```
+/var/log/aip/audit.jsonl {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    notifempty
+    create 0640 aip aip
+    sharedscripts
+    postrotate
+        systemctl reload aip || true
+    endscript
+}
+```
+
+### Using `newsyslog` (macOS)
+
+Add to `/etc/newsyslog.conf`:
+
+```
+/var/log/aip/audit.jsonl  644  7     *    @T00  J
+```
+
+## Centralized Logging
+
+### Ship to SIEM
+
+Forward logs to your SIEM for analysis:
+
+#### Splunk
+
+```bash
+# Install Splunk Universal Forwarder
+./splunkforwarder -add monitor /var/log/aip/audit.jsonl -sourcetype aip:audit
+```
+
+#### Elasticsearch
+
+Use Filebeat:
+
+```yaml
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/aip/audit.jsonl
+  json.keys_under_root: true
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "aip-audit-%{+yyyy.MM.dd}"
+```
+
+#### AWS CloudWatch
+
+Use CloudWatch Logs Agent:
+
+```json
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/aip/audit.jsonl",
+            "log_group_name": "/aip/audit",
+            "log_stream_name": "{instance_id}"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+### Kubernetes Integration
+
+In Kubernetes, use Fluentd or Fluent Bit to collect logs:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-config
+data:
+  fluent.conf: |
+    <source>
+      @type tail
+      path /var/log/aip/*.jsonl
+      pos_file /var/log/fluentd-aip.pos
+      tag aip.audit
+      <parse>
+        @type json
+      </parse>
+    </source>
+    
+    <match aip.audit>
+      @type s3
+      s3_bucket aip-audit-logs
+      s3_region us-east-1
+      path audit/%Y/%m/%d/
+    </match>
+```
+
+## Compliance Requirements
+
+### SOC 2 Type II
+
+Audit logs satisfy:
+- **CC6.1**: Logical and physical access controls
+- **CC7.2**: System monitoring
+
+**Required fields**:
+- Timestamp
+- User identity
+- Action performed (tool + arguments)
+- Authorization decision
+
+**Retention**: Minimum 1 year
+
+### GDPR Article 30
+
+Records of processing activities:
+
+```bash
+# Export processing activities for a specific user
+cat aip-audit.jsonl | jq 'select(.user == "user@example.com")' > gdpr-export.jsonl
+```
+
+**Required fields**:
+- Purpose of processing (tool name)
+- Categories of data (arguments)
+- Data subject (user)
+
+**Retention**: As long as data is processed + 1 year
+
+### HIPAA
+
+Access logs for Protected Health Information (PHI):
+
+**Required fields**:
+- Date and time of access
+- User identification
+- Action performed
+
+**Retention**: 6 years
+
+## Alerting
+
+### Real-Time Alerts
+
+Monitor for suspicious activity:
+
+```bash
+# Alert on denied requests
+tail -f aip-audit.jsonl | jq 'select(.decision == "deny")' | while read line; do
+  echo "ALERT: Denied request detected"
+  echo "$line" | mail -s "AIP Denial Alert" security@company.com
+done
+```
+
+### Prometheus Metrics
+
+Expose metrics for monitoring (v1alpha2):
+
+```prometheus
+# Total authorization decisions
+aip_authorization_decisions_total{decision="allow"} 1234
+aip_authorization_decisions_total{decision="deny"} 56
+
+# DLP matches
+aip_dlp_matches_total{pattern="AWS Access Key"} 12
+
+# Human approvals
+aip_human_approvals_total{approved="true"} 89
+aip_human_approvals_total{approved="false"} 23
+```
+
+### Grafana Dashboard
+
+Example queries:
+
+```promql
+# Denial rate
+rate(aip_authorization_decisions_total{decision="deny"}[5m])
+
+# DLP violations by pattern
+topk(10, sum by (pattern) (aip_dlp_matches_total))
+
+# Approval response time
+histogram_quantile(0.95, aip_human_approval_response_time_seconds)
+```
+
+## Immutability Guarantees
+
+### Append-Only Logs
+
+AIP audit logs are append-only. Configure file permissions:
+
+```bash
+chmod 640 /var/log/aip/audit.jsonl
+chown aip:aip /var/log/aip/audit.jsonl
+```
+
+The AIP process should only have write access, not modify access.
+
+### Cryptographic Verification (v1alpha2)
+
+Sign audit logs for tamper detection:
+
+```yaml
+spec:
+  audit:
+    signing: true
+    signing_key: /etc/aip/audit-signing-key.pem
+```
+
+Each log entry includes a signature:
+
+```json
+{
+  "timestamp": "2026-03-03T16:32:00Z",
+  "...": "...",
+  "signature": "ed25519:YWJjZGVm..."
+}
+```
+
+Verify integrity:
+
+```bash
+aip --verify-audit-log /var/log/aip/audit.jsonl --signing-key /etc/aip/audit-signing-key.pub
+```
+
+## Performance Impact
+
+Audit logging overhead:
+- **Latency**: Less than 1ms per request
+- **Disk I/O**: Asynchronous writes (non-blocking)
+- **Storage**: Approximately 1KB per log entry
+
+For high-throughput environments, use:
+- Fast SSD storage
+- Log rotation to manage disk usage
+- Async log shipping to SIEM
+
+## Troubleshooting
+
+<Accordion title="Log file growing too large">
+  Configure log rotation:
+
+  ```bash
+  # Rotate daily, keep 30 days
+  /var/log/aip/audit.jsonl {
+      daily
+      rotate 30
+      compress
+  }
+  ```
+</Accordion>
+
+<Accordion title="Logs not being written">
+  Check file permissions:
+
+  ```bash
+  ls -l /var/log/aip/audit.jsonl
+  # Should be writable by AIP process user
+  ```
+
+  Check disk space:
+
+  ```bash
+  df -h /var/log/aip/
+  ```
+</Accordion>
+
+<Accordion title="Parsing errors with jq">
+  Validate JSONL format:
+
+  ```bash
+  # Each line should be valid JSON
+  cat aip-audit.jsonl | while read line; do
+    echo "$line" | jq . > /dev/null || echo "Invalid JSON: $line"
+  done
+  ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Audit Format Reference" icon="code" href="/reference/audit-format">
+    Complete field reference
+  </Card>
+  <Card title="DLP Configuration" icon="shield-check" href="/guides/dlp-configuration">
+    Track DLP violations
+  </Card>
+  <Card title="Human-in-the-Loop" icon="hand" href="/guides/human-in-the-loop">
+    Log approval decisions
+  </Card>
+  <Card title="Production Best Practices" icon="server" href="/deployment/production-best-practices">
+    Production logging strategies
+  </Card>
+</CardGroup>

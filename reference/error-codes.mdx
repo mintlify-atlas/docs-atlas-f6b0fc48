@@ -1,0 +1,567 @@
+---
+title: "Error Codes Reference"
+description: "JSON-RPC error codes returned by the AIP policy engine"
+---
+
+Complete reference for JSON-RPC error codes returned when policy violations occur.
+
+## Error Response Format
+
+All AIP errors follow the JSON-RPC 2.0 error format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": <request_id>,
+  "error": {
+    "code": <error_code>,
+    "message": "<error_message>",
+    "data": {
+      "tool": "<tool_name>",
+      "reason": "<human_readable_reason>"
+    }
+  }
+}
+```
+
+<ResponseField name="error.code" type="integer" required>
+  Numeric error code from the table below.
+</ResponseField>
+
+<ResponseField name="error.message" type="string" required>
+  Short error description.
+</ResponseField>
+
+<ResponseField name="error.data" type="object">
+  Additional context about the error.
+  
+  <ResponseField name="error.data.tool" type="string">
+    Tool name that was blocked.
+  </ResponseField>
+  
+  <ResponseField name="error.data.reason" type="string">
+    Human-readable explanation of why the request was denied.
+  </ResponseField>
+</ResponseField>
+
+---
+
+## Error Codes
+
+### -32001 Forbidden
+
+**Description**: Tool not in `allowed_tools` list or explicitly blocked.
+
+**When it occurs**:
+- Tool is not in the `allowed_tools` list
+- Tool has a rule with `action: block`
+- Argument validation failed
+- Protected path access attempted
+
+**Example response**:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32001,
+    "message": "Forbidden",
+    "data": {
+      "tool": "github_delete_repo",
+      "reason": "Tool not in allowed_tools list"
+    }
+  }
+}
+```
+
+**How to fix**:
+- Add the tool to `spec.allowed_tools`
+- Remove `action: block` from the tool rule
+- Adjust `allow_args` regex patterns if argument validation failed
+
+---
+
+### -32002 Rate Limited
+
+**Description**: Rate limit exceeded for this tool.
+
+**When it occurs**:
+- Tool has a `rate_limit` rule and the limit was exceeded
+- Rate limits are **always enforced**, even in `monitor` mode
+
+**Example response**:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "error": {
+    "code": -32002,
+    "message": "Rate Limited",
+    "data": {
+      "tool": "list_gpus",
+      "reason": "Rate limit of 10/minute exceeded"
+    }
+  }
+}
+```
+
+**How to fix**:
+- Wait for the rate limit window to reset
+- Increase the rate limit in the policy
+- Optimize agent behavior to make fewer calls
+
+---
+
+### -32004 User Denied
+
+**Description**: User rejected the approval prompt.
+
+**When it occurs**:
+- Tool has `action: ask` rule
+- User clicked "Deny" in the approval dialog
+
+**Example response**:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "error": {
+    "code": -32004,
+    "message": "User Denied",
+    "data": {
+      "tool": "deploy_production",
+      "reason": "User rejected approval prompt"
+    }
+  }
+}
+```
+
+---
+
+### -32005 User Timeout
+
+**Description**: Approval prompt timed out (no user response).
+
+**When it occurs**:
+- Tool has `action: ask` rule
+- User did not respond within 60 seconds
+
+**Example response**:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "error": {
+    "code": -32005,
+    "message": "User Timeout",
+    "data": {
+      "tool": "run_training",
+      "reason": "Approval prompt timed out after 60 seconds"
+    }
+  }
+}
+```
+
+---
+
+### -32006 Method Not Allowed
+
+**Description**: JSON-RPC method not permitted by policy.
+
+**When it occurs**:
+- Method is not in `spec.allowed_methods`
+- Method is in `spec.denied_methods`
+
+**Example response**:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "error": {
+    "code": -32006,
+    "message": "Method Not Allowed",
+    "data": {
+      "method": "resources/write",
+      "reason": "Method not in allowed_methods list"
+    }
+  }
+}
+```
+
+---
+
+### -32007 Protected Path
+
+**Description**: Access to protected path blocked.
+
+**When it occurs**:
+- Tool argument contains a path in `spec.protected_paths`
+- Tool argument references the policy file itself (automatically protected)
+
+**Example response**:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "error": {
+    "code": -32007,
+    "message": "Protected Path",
+    "data": {
+      "tool": "read_file",
+      "reason": "Access to protected path: ~/.ssh/id_rsa"
+    }
+  }
+}
+```
+
+**How to fix**:
+- Remove the path from `spec.protected_paths` if access should be allowed
+- Use a different path that is not protected
+
+---
+
+## v1alpha2 Error Codes
+
+The following error codes were introduced in **v1alpha2** for identity and schema validation.
+
+### -32008 Token Required
+
+**Description**: Identity token required but not provided.
+
+**When it occurs**:
+- Policy has `identity.require_token: true`
+- Request does not include a valid identity token
+
+**Example response**:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "error": {
+    "code": -32008,
+    "message": "Token required",
+    "data": {
+      "tool": "file_write",
+      "reason": "Identity token required for this policy"
+    }
+  }
+}
+```
+
+**How to fix**:
+- Ensure the agent includes the identity token in requests
+- Set `identity.require_token: false` if tokens are optional
+
+---
+
+### -32009 Token Invalid
+
+**Description**: Identity token validation failed.
+
+**When it occurs**:
+- Token is expired
+- Policy hash mismatch
+- Session binding mismatch
+- Replay detected (nonce reuse)
+- Malformed token structure
+
+**Example responses**:
+
+<CodeGroup>
+```json Token Expired
+{
+  "code": -32009,
+  "message": "Token invalid",
+  "data": {
+    "tool": "file_write",
+    "reason": "Token expired",
+    "token_error": "token_expired"
+  }
+}
+```
+
+```json Policy Changed
+{
+  "code": -32009,
+  "message": "Token invalid",
+  "data": {
+    "tool": "file_write",
+    "reason": "Policy hash mismatch",
+    "token_error": "policy_changed"
+  }
+}
+```
+
+```json Replay Detected
+{
+  "code": -32009,
+  "message": "Token invalid",
+  "data": {
+    "tool": "file_write",
+    "reason": "Nonce reuse detected",
+    "token_error": "replay_detected"
+  }
+}
+```
+</CodeGroup>
+
+**Possible `token_error` values**:
+
+<ResponseField name="token_error" type="string">
+  Specific reason for token validation failure:
+  
+  - `token_expired` - Token past expiration time
+  - `policy_changed` - Policy hash mismatch
+  - `session_mismatch` - Session binding mismatch
+  - `binding_mismatch` - Strict binding validation failed
+  - `replay_detected` - Nonce reuse detected
+  - `audience_mismatch` - Token audience does not match
+  - `malformed` - Token structure invalid
+</ResponseField>
+
+---
+
+### -32010 Policy Signature Invalid
+
+**Description**: Policy signature verification failed.
+
+**When it occurs**:
+- Policy has `metadata.signature` field
+- Signature verification failed (policy was tampered with)
+
+**Example response**:
+
+```json
+{
+  "code": -32010,
+  "message": "Policy signature invalid",
+  "data": {
+    "policy": "production-agent",
+    "reason": "Signature verification failed"
+  }
+}
+```
+
+**Security note**: This error indicates the policy file may have been tampered with. Do not proceed.
+
+---
+
+### -32011 Token Revoked
+
+**Description**: Token or session was explicitly revoked.
+
+**When it occurs**:
+- Token was revoked via the `/v1/revoke` endpoint
+- Entire session was revoked
+
+**Example response**:
+
+```json
+{
+  "code": -32011,
+  "message": "Token revoked",
+  "data": {
+    "tool": "file_write",
+    "reason": "Session revoked by administrator",
+    "revoked_at": "2026-01-24T10:30:00.000Z",
+    "revocation_type": "session"
+  }
+}
+```
+
+<ResponseField name="revocation_type" type="string">
+  Type of revocation:
+  
+  - `session` - Entire session was revoked (all tokens invalid)
+  - `token` - Specific token was revoked (by nonce)
+</ResponseField>
+
+**Security note**: Error -32011 is distinct from -32009 to enable security teams to differentiate between normal token expiration and security incident responses.
+
+---
+
+### -32012 Audience Mismatch
+
+**Description**: Token audience does not match expected value.
+
+**When it occurs**:
+- Token's `aud` claim does not match `identity.audience` or `metadata.name`
+- Token was issued for a different MCP server
+
+**Example response**:
+
+```json
+{
+  "code": -32012,
+  "message": "Audience mismatch",
+  "data": {
+    "tool": "file_write",
+    "reason": "Token not valid for this service",
+    "expected_audience": "https://mcp.example.com",
+    "token_audience": "https://other-mcp.example.com"
+  }
+}
+```
+
+**Security note**: This error indicates a possible token misuse or attack. The `token_audience` value may be omitted from client responses to prevent information disclosure.
+
+---
+
+### -32013 Schema Mismatch
+
+**Description**: Tool schema hash does not match policy expectation.
+
+**When it occurs**:
+- Tool has `schema_hash` in its rule
+- Tool's current schema does not match the expected hash
+- Tool definition was changed after policy was created
+
+**Example response**:
+
+```json
+{
+  "code": -32013,
+  "message": "Schema mismatch",
+  "data": {
+    "tool": "read_file",
+    "reason": "Tool schema has changed since policy was created",
+    "expected_hash": "sha256:a3c7f2e8...",
+    "actual_hash": "sha256:b4d8e3f9..."
+  }
+}
+```
+
+**Security note**: This error indicates a potential **tool poisoning attack** or uncontrolled tool update. Implementations should:
+1. Alert security teams immediately
+2. Log full schema details for forensic analysis
+3. Consider blocking the MCP server until verified
+
+---
+
+### -32014 DLP Redaction Failed
+
+**Description**: Request redaction produced invalid content.
+
+**When it occurs**:
+- DLP is configured with `on_request_match: "redact"`
+- Redacted request fails argument validation or breaks JSON structure
+- Configured with `on_redaction_failure: "block"` or `"reject"`
+
+**Example response**:
+
+```json
+{
+  "code": -32014,
+  "message": "DLP redaction failed",
+  "data": {
+    "tool": "http_request",
+    "reason": "Redacted request failed argument validation",
+    "dlp_rule": "API Key",
+    "validation_error": "url: expected string, got [REDACTED:API Key]"
+  }
+}
+```
+
+---
+
+## Error Handling Best Practices
+
+### For Agent Developers
+
+1. **Parse error codes programmatically**:
+   ```python
+   if error.code == -32001:
+       # Tool not allowed - request different capability
+   elif error.code == -32002:
+       # Rate limited - implement backoff
+   elif error.code == -32009:
+       # Token invalid - refresh token
+   ```
+
+2. **Handle rate limiting gracefully**:
+   ```python
+   try:
+       result = call_tool("list_gpus")
+   except RateLimitError:
+       time.sleep(60)  # Wait for rate limit window
+       result = call_tool("list_gpus")
+   ```
+
+3. **Refresh tokens on expiration**:
+   ```python
+   if error.code == -32009 and error.data.token_error == "token_expired":
+       token = refresh_identity_token()
+       retry_with_new_token(token)
+   ```
+
+### For Policy Authors
+
+1. **Test policies in monitor mode first**:
+   ```yaml
+   spec:
+     mode: monitor  # See what would be blocked
+   ```
+
+2. **Check audit logs for unexpected errors**:
+   ```bash
+   cat aip-audit.jsonl | jq 'select(.decision == "BLOCK")'
+   ```
+
+3. **Use descriptive error reasons**:
+   ```yaml
+   tool_rules:
+     - tool: production_deploy
+       action: block
+       # Reason will appear in error.data.reason
+   ```
+
+---
+
+## Error Code Summary Table
+
+| Code | Name | Severity | Always Enforced? |
+|------|------|----------|------------------|
+| -32001 | Forbidden | High | No (monitor mode) |
+| -32002 | Rate Limited | Medium | **Yes** |
+| -32004 | User Denied | Low | **Yes** |
+| -32005 | User Timeout | Low | **Yes** |
+| -32006 | Method Not Allowed | High | No (monitor mode) |
+| -32007 | Protected Path | Critical | **Yes** |
+| -32008 | Token Required | High | **Yes** |
+| -32009 | Token Invalid | High | **Yes** |
+| -32010 | Policy Signature Invalid | Critical | **Yes** |
+| -32011 | Token Revoked | High | **Yes** |
+| -32012 | Audience Mismatch | High | **Yes** |
+| -32013 | Schema Mismatch | Critical | **Yes** |
+| -32014 | DLP Redaction Failed | High | **Yes** |
+
+**Note**: Some errors (rate limiting, protected paths, identity errors) are **always enforced** even in `monitor` mode for security reasons.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Policy YAML" icon="file-code" href="/reference/policy-yaml">
+    Complete policy YAML reference
+  </Card>
+  
+  <Card title="Audit Format" icon="file-lines" href="/reference/audit-format">
+    Audit log format specification
+  </Card>
+  
+  <Card title="Token Format" icon="key" href="/reference/token-format">
+    AAT token structure reference
+  </Card>
+  
+  <Card title="Troubleshooting" icon="wrench" href="/guides/installation">
+    Common issues and solutions
+  </Card>
+</CardGroup>

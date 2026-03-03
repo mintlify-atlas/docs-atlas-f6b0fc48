@@ -1,0 +1,217 @@
+---
+title: Installation
+description: Install and set up the Agent Identity Protocol proxy
+---
+
+This guide walks you through installing AIP and running your first secured MCP server.
+
+## Prerequisites
+
+Before installing AIP, ensure you have:
+
+- **Go 1.21+** (for building from source)
+- **Python 3.11+** or **Node.js 20+** (for MCP servers)
+- **An MCP-compatible AI client** (Cursor IDE, Claude Desktop, VS Code)
+
+## Installation Methods
+
+<Tabs>
+  <Tab title="Go Install">
+    Install directly from the Go implementation repository:
+
+    ```bash
+    go install github.com/openagentidentityprotocol/aip-go/cmd/aip@latest
+    ```
+
+    Verify installation:
+
+    ```bash
+    aip --version
+    ```
+  </Tab>
+
+  <Tab title="Build from Source">
+    Clone and build the reference implementation:
+
+    ```bash
+    git clone https://github.com/openagentidentityprotocol/aip-go.git
+    cd aip-go
+    go build ./cmd/aip
+    sudo mv aip /usr/local/bin/
+    ```
+
+    Verify installation:
+
+    ```bash
+    aip --version
+    ```
+  </Tab>
+
+  <Tab title="Docker">
+    Run AIP as a Docker container:
+
+    ```bash
+    docker pull ghcr.io/openagentidentityprotocol/aip-go:latest
+    docker run -v $(pwd)/policy.yaml:/policy.yaml aip-go --policy /policy.yaml
+    ```
+  </Tab>
+</Tabs>
+
+## Quick Start
+
+<Steps>
+  <Step title="Create a policy file">
+    Create `agent.yaml` with a simple read-only policy:
+
+    ```yaml
+    apiVersion: aip.io/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: secure-agent
+    spec:
+      mode: enforce
+      allowed_tools:
+        - read_file
+        - list_directory
+        - git_status
+      tool_rules:
+        - tool: write_file
+          action: ask        # Human approval required
+        - tool: exec_command
+          action: block      # Never allowed
+    ```
+  </Step>
+
+  <Step title="Start the AIP proxy">
+    Wrap your existing MCP server:
+
+    ```bash
+    # For a Python MCP server
+    aip --target "python mcp_server.py" --policy ./agent.yaml
+
+    # For a Node.js MCP server
+    aip --target "npx @mcp/server" --policy ./agent.yaml
+    ```
+
+    The proxy will start on stdio and forward to your MCP server.
+  </Step>
+
+  <Step title="Configure your AI client">
+    Generate configuration for your AI client:
+
+    ```bash
+    # For Cursor IDE
+    aip --generate-cursor-config --policy ./agent.yaml --target "npx @mcp/server"
+    ```
+
+    This outputs JSON configuration to add to your client's MCP settings.
+  </Step>
+
+  <Step title="Test the policy">
+    Try using a blocked tool in your AI client:
+
+    ```
+    User: "Run the command 'rm -rf /'"
+    Agent: [attempts exec_command]
+    AIP: ❌ Permission Denied (logged to audit trail)
+    ```
+  </Step>
+</Steps>
+
+## Verification
+
+### Check Policy Evaluation
+
+Verify the proxy is enforcing policy:
+
+```bash
+# Start in monitor mode to see what would be blocked
+aip --target "python mcp_server.py" --policy ./agent.yaml --mode monitor
+```
+
+Monitor mode logs violations but allows them through - useful for testing.
+
+### View Audit Logs
+
+Audit logs are written to `aip-audit.jsonl` by default:
+
+```bash
+cat aip-audit.jsonl | jq
+```
+
+Example log entry:
+
+```json
+{
+  "timestamp": "2026-03-03T16:32:00Z",
+  "agent_id": "agent-abc123",
+  "user": "user@example.com",
+  "tool": "exec_command",
+  "arguments": {"cmd": "rm -rf /"},
+  "decision": "deny",
+  "reason": "tool not in allowed_tools"
+}
+```
+
+## System Requirements
+
+### Performance
+
+- **Memory**: 10-20 MB per proxy instance
+- **CPU**: Minimal (less than 1% idle)
+- **Disk**: Audit logs grow at approximately 1KB per request
+
+### Supported Platforms
+
+- **Linux**: All distributions (amd64, arm64)
+- **macOS**: 10.15+ (Intel and Apple Silicon)
+- **Windows**: Windows 10+ (experimental)
+
+## Troubleshooting
+
+<Accordion title="Policy validation errors">
+  If you see validation errors on startup:
+
+  ```bash
+  # Validate your policy file
+  aip --validate-policy ./agent.yaml
+  ```
+
+  Common issues:
+  - Invalid YAML syntax
+  - Unknown fields in spec
+  - Regex compilation errors in `allow_args`
+</Accordion>
+
+<Accordion title="MCP server connection issues">
+  If the proxy can't connect to your MCP server:
+
+  - Verify the target command works standalone: `python mcp_server.py`
+  - Check stdio/stderr output for errors
+  - Ensure the MCP server implements the protocol correctly
+</Accordion>
+
+<Accordion title="Human-in-the-loop dialogs not appearing">
+  For `action: ask` to work:
+
+  - **macOS**: Requires terminal to have accessibility permissions
+  - **Linux**: Requires `zenity` or `kdialog` installed
+  - **Windows**: Not yet supported
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Writing Policies" icon="file-code" href="/guides/writing-policies">
+    Learn to write comprehensive agent policies
+  </Card>
+  <Card title="DLP Configuration" icon="shield-check" href="/guides/dlp-configuration">
+    Configure data loss prevention scanning
+  </Card>
+  <Card title="Deployment" icon="server" href="/deployment/local-proxy">
+    Deploy AIP in production environments
+  </Card>
+  <Card title="Audit Logging" icon="clipboard-list" href="/guides/audit-logging">
+    Set up compliance-ready audit trails
+  </Card>
+</CardGroup>

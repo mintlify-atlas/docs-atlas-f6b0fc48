@@ -1,0 +1,258 @@
+---
+title: "Roadmap"
+description: "Future direction and planned features for the Agent Identity Protocol"
+---
+
+We're building a **standard**, not just a tool. The Agent Identity Protocol aims to become the universal identity layer for the Internet of Agents (IoA).
+
+## Vision
+
+Establish AIP as the de facto standard for agent identity, authentication, and authorization—submitted to the IETF for standardization and adopted across the AI ecosystem.
+
+---
+
+## Release Timeline
+
+### v0.1: Localhost Proxy ✅
+
+**Status**: Released (2026-01-20)
+
+**Goal**: The *"Little Snitch"* for AI Agents
+
+Provide local policy enforcement for individual developers securing their AI agents.
+
+<AccordionGroup>
+  <Accordion title="Completed Features">
+    - ✅ Tool allowlist enforcement
+    - ✅ Argument validation with regex
+    - ✅ Human-in-the-Loop (macOS, Linux)
+    - ✅ DLP output scanning
+    - ✅ JSONL audit logging
+    - ✅ Monitor mode (dry-run testing)
+    - ✅ Cross-platform support (macOS, Linux, Windows)
+    - ✅ Cursor/Claude Desktop integration
+    - ✅ Example policy library
+  </Accordion>
+</AccordionGroup>
+
+**Use Case**: Individual developers securing local AI agents during development.
+
+---
+
+### v0.2: Kubernetes Sidecar 🚧
+
+**Status**: In Progress
+
+**Goal**: The *"Istio"* for AI Agents
+
+Enable enterprise deployment with orchestration and observability.
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Integration" icon="dharmachakra">
+    - [ ] Helm chart for easy deployment
+    - [ ] NetworkPolicy integration
+    - [ ] Pod security policies
+    - [ ] Init container pattern
+  </Card>
+  
+  <Card title="Observability" icon="chart-line">
+    - [ ] Prometheus metrics export
+    - [ ] OpenTelemetry tracing
+    - [ ] Grafana dashboard templates
+    - [ ] Alert rule examples
+  </Card>
+  
+  <Card title="Multi-Tenancy" icon="users">
+    - [ ] Namespace-scoped policies
+    - [ ] RBAC integration
+    - [ ] Tenant isolation
+    - [ ] Policy inheritance
+  </Card>
+  
+  <Card title="High Availability" icon="server">
+    - [ ] Stateless proxy design
+    - [ ] Horizontal pod autoscaling
+    - [ ] Health checks and readiness probes
+    - [ ] Graceful shutdown
+  </Card>
+</CardGroup>
+
+**Use Case**: Platform teams deploying agent infrastructure at scale.
+
+**Target Release**: Q2 2026
+
+---
+
+### v1.0: OIDC / SPIFFE Federation 📋
+
+**Status**: Planned
+
+**Goal**: Enterprise Identity and Federation
+
+Integrate with existing identity infrastructure for production-grade deployments.
+
+<Steps>
+  <Step title="Workload Identity Federation">
+    - SPIFFE/SPIRE integration for workload identities
+    - Kubernetes ServiceAccount binding
+    - AWS IAM Roles for Service Accounts (IRSA)
+    - GCP Workload Identity
+    - Azure Managed Identity
+  </Step>
+  
+  <Step title="Centralized Policy Management">
+    - Policy registry with versioning
+    - GitOps integration (ArgoCD, Flux)
+    - Policy-as-Code validation
+    - Automated policy rollout
+  </Step>
+  
+  <Step title="Multi-Tenant Audit Aggregation">
+    - Centralized audit log aggregation
+    - SIEM integration (Splunk, Datadog, Elastic)
+    - Compliance reporting (SOC 2, GDPR, HIPAA)
+    - Forensic query capabilities
+  </Step>
+  
+  <Step title="Federation Support">
+    - Cross-organization agent identity
+    - Trust framework for agent delegation
+    - Federated policy enforcement
+    - Inter-domain audit trails
+  </Step>
+</Steps>
+
+**Use Case**: Enterprises requiring compliance, federation, and centralized governance.
+
+**Target Release**: Q4 2026
+
+---
+
+## Future Extensions
+
+<Note>
+  These features are being considered for post-v1.0 releases based on community feedback.
+</Note>
+
+### Network Egress Control
+
+**Problem**: MCP servers can currently make arbitrary network calls.
+
+**Solution**:
+- Declarative egress allow/block lists
+- DNS-based filtering
+- Container network isolation
+- Circuit breaker patterns
+
+**Target**: v1beta1
+
+### Agent Capability Attestation
+
+**Problem**: No cryptographic proof of agent capabilities.
+
+**Solution**:
+- Hardware-backed attestation (TPM, SGX)
+- Manifest signing and verification
+- Runtime integrity monitoring
+- Capability certificates
+
+**Target**: v1.1
+
+### Multi-Agent Workflows
+
+**Problem**: Complex workflows involving multiple agents lack coordination.
+
+**Solution**:
+- Workflow-scoped policies
+- Agent-to-agent delegation
+- Composite audit trails
+- Workflow orchestration primitives
+
+**Target**: v1.2
+
+### AI Model Governance
+
+**Problem**: No visibility into which models are used by agents.
+
+**Solution**:
+- Model provenance tracking
+- Model allowlists by vendor/version
+- Inference cost tracking
+- Model bias auditing hooks
+
+**Target**: v2.0
+
+---
+
+## IETF Standardization Track
+
+Our goal is to submit AIP to the IETF for standardization:
+
+<Steps>
+  <Step title="Draft Specification">
+    Complete formal specification document
+    
+    **Status**: v1alpha2 complete
+  </Step>
+  
+  <Step title="Reference Implementations">
+    Multiple independent implementations
+    
+    **Status**: Go implementation stable, Rust planned
+  </Step>
+  
+  <Step title="Conformance Testing">
+    Comprehensive test suite for interoperability
+    
+    **Status**: In progress
+  </Step>
+  
+  <Step title="Community Adoption">
+    Real-world deployments and feedback
+    
+    **Status**: Early adopters testing
+  </Step>
+  
+  <Step title="Internet-Draft Submission">
+    Submit to IETF for review
+    
+    **Status**: Planned for Q3 2026
+  </Step>
+</Steps>
+
+---
+
+## How You Can Help
+
+We welcome contributions at all levels:
+
+<CardGroup cols={3}>
+  <Card title="Try It" icon="play">
+    Deploy AIP in your environment and provide feedback on usability and edge cases.
+  </Card>
+  
+  <Card title="Contribute Code" icon="code">
+    Implement features from the roadmap or build integrations with your favorite tools.
+  </Card>
+  
+  <Card title="Spread the Word" icon="bullhorn">
+    Share your experience, write blog posts, or speak at conferences about AIP.
+  </Card>
+</CardGroup>
+
+See our [Contributing Guide](/community/contributing) to get started.
+
+---
+
+## Stay Updated
+
+Follow development progress:
+
+- **GitHub Discussions**: [Architecture discussions](https://github.com/ArangoGutierrez/agent-identity-protocol/discussions)
+- **GitHub Issues**: [Feature requests and bugs](https://github.com/ArangoGutierrez/agent-identity-protocol/issues)
+- **Twitter/X**: [@ArangoGutworker](https://twitter.com/ArangoGutworker)
+- **Changelog**: [Version history](/community/changelog)
+
+<Note>
+  Roadmap items and timelines are subject to change based on community feedback and priorities.
+</Note>

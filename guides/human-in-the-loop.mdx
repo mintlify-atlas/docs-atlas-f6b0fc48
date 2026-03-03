@@ -1,0 +1,356 @@
+---
+title: Human-in-the-Loop
+description: Configure human approval workflows for sensitive agent operations
+---
+
+Human-in-the-Loop (HITL) allows you to require explicit human approval for sensitive or high-risk agent actions. This guide shows you how to configure and use HITL with AIP.
+
+## Overview
+
+When a tool is configured with `action: ask`, AIP will:
+
+1. Intercept the tool call
+2. Display a native OS approval dialog to the user
+3. Wait for user decision (Allow or Deny)
+4. Forward the request only if approved
+5. Log the decision to the audit trail
+
+## Configuration
+
+Configure HITL in your policy's `tool_rules` section:
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: hitl-example
+spec:
+  mode: enforce
+  allowed_tools:
+    - read_file
+    - write_file
+  tool_rules:
+    - tool: write_file
+      action: ask        # Human approval required
+```
+
+## How It Works
+
+<Steps>
+  <Step title="Agent attempts a sensitive operation">
+    Your AI agent tries to call a tool marked with `action: ask`:
+
+    ```json
+    {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "params": {
+        "name": "write_file",
+        "arguments": {
+          "path": "/etc/config.yaml",
+          "content": "..."
+        }
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="AIP shows approval dialog">
+    A native OS dialog appears:
+
+    ```
+    ┌─────────────────────────────────────────┐
+    │  Agent Identity Protocol                │
+    ├─────────────────────────────────────────┤
+    │  The agent wants to call:               │
+    │                                         │
+    │  Tool: write_file                       │
+    │  Arguments:                             │
+    │    path: /etc/config.yaml               │
+    │                                         │
+    │  [ Deny ]              [ Allow ]        │
+    └─────────────────────────────────────────┘
+    ```
+  </Step>
+
+  <Step title="User makes a decision">
+    - **Allow**: Request is forwarded to the MCP server
+    - **Deny**: Request is blocked with error `-32002`
+    - **No response (60s timeout)**: Auto-deny
+  </Step>
+
+  <Step title="Decision is logged">
+    The approval/denial is recorded in the audit log:
+
+    ```json
+    {
+      "timestamp": "2026-03-03T16:45:00Z",
+      "tool": "write_file",
+      "decision": "allow",
+      "reason": "human approved",
+      "human_decision": {
+        "approved": true,
+        "response_time_ms": 3420
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Platform Support
+
+### macOS
+
+Uses native `osascript` dialogs. **Requires accessibility permissions**:
+
+1. Open **System Preferences** → **Security & Privacy** → **Privacy** → **Accessibility**
+2. Add your terminal application (Terminal.app, iTerm2, etc.)
+
+### Linux
+
+Requires one of:
+- **zenity** (GNOME)
+- **kdialog** (KDE)
+- **Xdialog** (fallback)
+
+Install on Ubuntu/Debian:
+
+```bash
+sudo apt-get install zenity
+```
+
+Install on Fedora:
+
+```bash
+sudo dnf install zenity
+```
+
+### Windows
+
+<Note>
+  Windows support is experimental. Native dialogs require PowerShell execution policy configuration.
+</Note>
+
+## Use Cases
+
+### 1. Financial Operations
+
+```yaml
+tool_rules:
+  - tool: stripe_create_charge
+    action: ask
+    allow_args:
+      amount: "^[0-9]+$"  # Only numeric amounts
+```
+
+Require human approval before charging customers.
+
+### 2. Production Deployments
+
+```yaml
+tool_rules:
+  - tool: kubernetes_apply
+    action: ask
+    allow_args:
+      namespace: "^production$"
+```
+
+Prevent accidental production deploys without explicit approval.
+
+### 3. Data Deletion
+
+```yaml
+tool_rules:
+  - tool: s3_delete_object
+    action: ask
+  
+  - tool: postgres_query
+    action: ask
+    allow_args:
+      query: "^DELETE FROM .*$"
+```
+
+Confirm before deleting data.
+
+### 4. External Communications
+
+```yaml
+tool_rules:
+  - tool: slack_post_message
+    action: ask
+    allow_args:
+      channel: "^#(general|announcements)$"  # Only public channels
+  
+  - tool: email_send
+    action: ask
+```
+
+Review messages before they're sent to external parties.
+
+## Advanced Configuration
+
+### Timeout Configuration
+
+<Note>
+  The default timeout is 60 seconds. This is currently hardcoded but will be configurable in v1alpha3.
+</Note>
+
+If the user doesn't respond within 60 seconds, the request is auto-denied:
+
+```json
+{
+  "error": {
+    "code": -32002,
+    "message": "Human approval required but timed out"
+  }
+}
+```
+
+### Combining with Argument Validation
+
+You can combine `action: ask` with `allow_args` for fine-grained control:
+
+```yaml
+tool_rules:
+  # Small writes are auto-allowed
+  - tool: write_file
+    action: allow
+    allow_args:
+      path: "^/tmp/.*$"
+  
+  # System file writes require approval
+  - tool: write_file
+    action: ask
+    allow_args:
+      path: "^/etc/.*$"
+```
+
+### Conditional Approval
+
+Different actions for different arguments:
+
+```yaml
+tool_rules:
+  # Read-only DB queries: auto-allow
+  - tool: postgres_query
+    action: allow
+    allow_args:
+      query: "^SELECT .*$"
+  
+  # Write queries: require approval
+  - tool: postgres_query
+    action: ask
+    allow_args:
+      query: "^(INSERT|UPDATE|DELETE) .*$"
+  
+  # DDL statements: always block
+  - tool: postgres_query
+    action: block
+    allow_args:
+      query: "^(DROP|ALTER|CREATE) .*$"
+```
+
+## Security Considerations
+
+<Warning>
+  **HITL is not a replacement for authentication**
+  
+  Users can still click "Allow" without understanding the request. Use HITL as a speed bump, not as primary security.
+</Warning>
+
+<Tip>
+  **Combine HITL with other controls**
+  
+  - Use `allow_args` to validate parameters
+  - Enable DLP scanning to prevent data exfiltration
+  - Review audit logs regularly
+</Tip>
+
+### Preventing Approval Fatigue
+
+Don't overuse `action: ask`. Too many approval prompts lead to:
+- Users blindly clicking "Allow"
+- Reduced productivity
+- Security theater instead of real security
+
+**Good**: Ask for production deploys, financial transactions, external communications
+
+**Bad**: Ask for every file read, every API call
+
+## Troubleshooting
+
+<Accordion title="Dialogs not appearing (macOS)">
+  Check accessibility permissions:
+
+  ```bash
+  # Test dialog manually
+  osascript -e 'display dialog "Test" buttons {"Allow", "Deny"}'
+  ```
+
+  If this fails, grant accessibility permissions to your terminal.
+</Accordion>
+
+<Accordion title="Dialogs not appearing (Linux)">
+  Ensure `zenity` or `kdialog` is installed:
+
+  ```bash
+  # Test dialog manually
+  zenity --question --text="Test" --ok-label="Allow" --cancel-label="Deny"
+  ```
+
+  Install if missing:
+  ```bash
+  sudo apt-get install zenity  # Ubuntu/Debian
+  sudo dnf install zenity      # Fedora
+  ```
+</Accordion>
+
+<Accordion title="Auto-deny after 60 seconds">
+  This is expected behavior. The user must respond within 60 seconds or the request is auto-denied for security.
+
+  Future versions will allow configuring the timeout.
+</Accordion>
+
+## Audit Trail
+
+Every HITL decision is logged:
+
+```json
+{
+  "timestamp": "2026-03-03T16:45:00Z",
+  "agent_id": "agent-abc123",
+  "user": "user@example.com",
+  "tool": "write_file",
+  "arguments": {"path": "/etc/config.yaml"},
+  "decision": "allow",
+  "reason": "human approved",
+  "human_decision": {
+    "approved": true,
+    "response_time_ms": 3420,
+    "dialog_shown_at": "2026-03-03T16:44:56.580Z"
+  }
+}
+```
+
+Query approval history:
+
+```bash
+cat aip-audit.jsonl | jq 'select(.decision == "allow" and .reason == "human approved")'
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Writing Policies" icon="file-code" href="/guides/writing-policies">
+    Learn to write comprehensive policies
+  </Card>
+  <Card title="DLP Configuration" icon="shield-check" href="/guides/dlp-configuration">
+    Prevent data exfiltration
+  </Card>
+  <Card title="Audit Logging" icon="clipboard-list" href="/guides/audit-logging">
+    Review approval decisions
+  </Card>
+  <Card title="Error Codes" icon="code" href="/reference/error-codes">
+    Understand -32002 errors
+  </Card>
+</CardGroup>

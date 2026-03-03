@@ -1,0 +1,540 @@
+---
+title: "Audit Log Format"
+description: "JSONL audit log format for compliance and forensic analysis"
+---
+
+AIP generates immutable audit logs in **JSONL** (JSON Lines) format. Each line is a complete JSON object representing a single authorization decision or identity event.
+
+## File Format
+
+**Format**: JSONL (JSON Lines) - one JSON object per line
+
+**Default location**: `aip-audit.jsonl` (configurable)
+
+**Characteristics**:
+- Append-only (immutable)
+- One event per line
+- Parseable by `jq`, `grep`, log aggregation tools
+- Timestamp-ordered
+
+**Example log file**:
+```jsonl
+{"timestamp":"2026-01-24T10:30:45.123Z","direction":"upstream","method":"tools/call","tool":"read_file","decision":"ALLOW","policy_mode":"enforce","violation":false}
+{"timestamp":"2026-01-24T10:30:46.234Z","direction":"upstream","method":"tools/call","tool":"delete_file","decision":"BLOCK","policy_mode":"enforce","violation":true,"failed_arg":"path"}
+{"timestamp":"2026-01-24T10:35:00.000Z","event":"TOKEN_ISSUED","session_id":"550e8400-e29b-41d4-a716-446655440000","token_id":"abc123def456"}
+```
+
+---
+
+## Authorization Decision Events
+
+Logged for every `tools/call` request and JSON-RPC method invocation.
+
+### Required Fields
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp with millisecond precision.
+  
+  **Format**: `YYYY-MM-DDTHH:MM:SS.sssZ` (UTC)
+  
+  **Example**: `"2026-01-24T10:30:45.123Z"`
+</ResponseField>
+
+<ResponseField name="direction" type="string" required>
+  Request direction.
+  
+  | Value | Description |
+  |-------|-------------|
+  | `upstream` | Client → MCP server (request) |
+  | `downstream` | MCP server → Client (response) |
+</ResponseField>
+
+<ResponseField name="decision" type="string" required>
+  Authorization decision result.
+  
+  | Value | Description |
+  |-------|-------------|
+  | `ALLOW` | Request permitted |
+  | `BLOCK` | Request denied |
+  | `ALLOW_MONITOR` | Would block, but allowed (monitor mode) |
+  | `RATE_LIMITED` | Blocked due to rate limit |
+  | `ASK_APPROVED` | User approved prompt |
+  | `ASK_DENIED` | User rejected prompt |
+</ResponseField>
+
+<ResponseField name="policy_mode" type="string" required>
+  Policy enforcement mode at decision time.
+  
+  | Value | Description |
+  |-------|-------------|
+  | `enforce` | Violations are blocked |
+  | `monitor` | Violations logged but allowed |
+</ResponseField>
+
+<ResponseField name="violation" type="boolean" required>
+  Whether a policy violation was detected.
+  
+  **Example**: `true` if tool not in `allowed_tools`, even if `mode: monitor` allowed it through.
+</ResponseField>
+
+### Optional Fields
+
+<ResponseField name="method" type="string">
+  JSON-RPC method name (e.g., `"tools/call"`, `"tools/list"`, `"initialize"`).
+</ResponseField>
+
+<ResponseField name="tool" type="string">
+  Tool name for `tools/call` requests.
+  
+  **Example**: `"github_get_repo"`
+</ResponseField>
+
+<ResponseField name="args" type="object">
+  Tool arguments. **Should be redacted** for sensitive data.
+  
+  **Security note**: Consider omitting or redacting this field in production.
+</ResponseField>
+
+<ResponseField name="failed_arg" type="string">
+  Name of argument that failed validation (if applicable).
+  
+  **Example**: `"path"`
+</ResponseField>
+
+<ResponseField name="failed_rule" type="string">
+  Regex pattern that failed to match (if applicable).
+  
+  **Example**: `"^/home/.*"`
+</ResponseField>
+
+<ResponseField name="session_id" type="string">
+  **v1alpha2 feature**. Session UUID when identity is enabled.
+  
+  **Format**: UUID v4
+  
+  **Example**: `"550e8400-e29b-41d4-a716-446655440000"`
+</ResponseField>
+
+<ResponseField name="token_id" type="string">
+  **v1alpha2 feature**. Token nonce for correlation with identity events.
+  
+  **Example**: `"abc123def456"`
+</ResponseField>
+
+<ResponseField name="policy_hash" type="string">
+  **v1alpha2 feature**. SHA-256 hash of policy at decision time.
+  
+  **Format**: 64-character hex string
+  
+  **Example**: `"a3c7f2e8d9b4f1e2c8a7d6f3e9b2c4f1a8e7d3c2b5f4e9a7c3d8f2b6e1a9c4f7"`
+</ResponseField>
+
+### Example Authorization Events
+
+<CodeGroup>
+```json Allowed Request
+{
+  "timestamp": "2026-01-24T10:30:45.123Z",
+  "direction": "upstream",
+  "method": "tools/call",
+  "tool": "read_file",
+  "args": {"path": "/home/user/data.txt"},
+  "decision": "ALLOW",
+  "policy_mode": "enforce",
+  "violation": false,
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "policy_hash": "a3c7f2e8d9b4f1e2c8a7d6f3e9b2c4f1a8e7d3c2b5f4e9a7c3d8f2b6e1a9c4f7"
+}
+```
+
+```json Blocked Request
+{
+  "timestamp": "2026-01-24T10:30:46.234Z",
+  "direction": "upstream",
+  "method": "tools/call",
+  "tool": "delete_file",
+  "args": {"path": "/etc/passwd"},
+  "decision": "BLOCK",
+  "policy_mode": "enforce",
+  "violation": true,
+  "failed_arg": "path",
+  "failed_rule": "^/home/.*",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "policy_hash": "a3c7f2e8d9b4f1e2c8a7d6f3e9b2c4f1a8e7d3c2b5f4e9a7c3d8f2b6e1a9c4f7"
+}
+```
+
+```json Monitor Mode (Violation Allowed)
+{
+  "timestamp": "2026-01-24T10:30:47.345Z",
+  "direction": "upstream",
+  "method": "tools/call",
+  "tool": "exec_command",
+  "args": {"command": "rm -rf /tmp/*"},
+  "decision": "ALLOW_MONITOR",
+  "policy_mode": "monitor",
+  "violation": true,
+  "session_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+```json Rate Limited
+{
+  "timestamp": "2026-01-24T10:30:48.456Z",
+  "direction": "upstream",
+  "method": "tools/call",
+  "tool": "list_gpus",
+  "decision": "RATE_LIMITED",
+  "policy_mode": "enforce",
+  "violation": true,
+  "session_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</CodeGroup>
+
+---
+
+## Identity Events (v1alpha2)
+
+Logged when `identity.enabled: true`. These events track token lifecycle and validation failures.
+
+### TOKEN_ISSUED
+
+Logged when a new identity token is created.
+
+<ResponseField name="event" type="string" required>
+  Event type: `"TOKEN_ISSUED"`
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp.
+</ResponseField>
+
+<ResponseField name="session_id" type="string" required>
+  Session UUID.
+</ResponseField>
+
+<ResponseField name="token_id" type="string" required>
+  Token nonce.
+</ResponseField>
+
+<ResponseField name="expires_at" type="string" required>
+  ISO 8601 expiration timestamp.
+</ResponseField>
+
+<ResponseField name="policy_hash" type="string" required>
+  Policy hash at issuance time.
+</ResponseField>
+
+**Example**:
+```json
+{
+  "timestamp": "2026-01-24T10:30:00.000Z",
+  "event": "TOKEN_ISSUED",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "token_id": "abc123def456",
+  "expires_at": "2026-01-24T10:35:00.000Z",
+  "policy_hash": "a3c7f2e8d9b4f1e2c8a7d6f3e9b2c4f1a8e7d3c2b5f4e9a7c3d8f2b6e1a9c4f7"
+}
+```
+
+### TOKEN_ROTATED
+
+Logged when a token is rotated before expiry.
+
+<ResponseField name="event" type="string" required>
+  Event type: `"TOKEN_ROTATED"`
+</ResponseField>
+
+<ResponseField name="old_token_id" type="string" required>
+  Previous token nonce.
+</ResponseField>
+
+<ResponseField name="new_token_id" type="string" required>
+  New token nonce.
+</ResponseField>
+
+**Example**:
+```json
+{
+  "timestamp": "2026-01-24T10:34:00.000Z",
+  "event": "TOKEN_ROTATED",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "old_token_id": "abc123def456",
+  "new_token_id": "xyz789ghi012",
+  "expires_at": "2026-01-24T10:39:00.000Z"
+}
+```
+
+### TOKEN_VALIDATION_FAILED
+
+Logged when token validation fails.
+
+<ResponseField name="event" type="string" required>
+  Event type: `"TOKEN_VALIDATION_FAILED"`
+</ResponseField>
+
+<ResponseField name="error" type="string" required>
+  Validation error reason (see [Error Codes](/reference/error-codes#-32009-token-invalid)).
+  
+  **Possible values**:
+  - `token_expired`
+  - `policy_changed`
+  - `session_mismatch`
+  - `binding_mismatch`
+  - `replay_detected`
+  - `audience_mismatch`
+  - `malformed`
+</ResponseField>
+
+**Example**:
+```json
+{
+  "timestamp": "2026-01-24T10:36:00.000Z",
+  "event": "TOKEN_VALIDATION_FAILED",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "token_id": "abc123def456",
+  "error": "token_expired"
+}
+```
+
+### REVOCATION
+
+Logged when a token or session is revoked via the `/v1/revoke` endpoint.
+
+<ResponseField name="event" type="string" required>
+  Event type: `"REVOCATION"`
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  Revocation type: `"session"` or `"token"`
+</ResponseField>
+
+<ResponseField name="target" type="string" required>
+  Session ID or token nonce that was revoked.
+</ResponseField>
+
+<ResponseField name="reason" type="string">
+  Human-readable reason for revocation.
+</ResponseField>
+
+<ResponseField name="admin" type="string">
+  Administrator who initiated revocation.
+</ResponseField>
+
+**Example**:
+```json
+{
+  "timestamp": "2026-01-24T10:30:00.000Z",
+  "event": "REVOCATION",
+  "type": "session",
+  "target": "550e8400-e29b-41d4-a716-446655440000",
+  "reason": "Suspected compromise",
+  "admin": "operator@example.com"
+}
+```
+
+---
+
+## DLP Events
+
+Logged when DLP patterns match in requests or responses.
+
+### DLP_MATCH (Response)
+
+<ResponseField name="event" type="string" required>
+  Event type: `"DLP_MATCH"`
+</ResponseField>
+
+<ResponseField name="direction" type="string" required>
+  `"downstream"` for response matches.
+</ResponseField>
+
+<ResponseField name="tool" type="string" required>
+  Tool that returned sensitive data.
+</ResponseField>
+
+<ResponseField name="dlp_rule" type="string" required>
+  Name of the DLP pattern that matched.
+</ResponseField>
+
+<ResponseField name="redacted" type="boolean" required>
+  Whether content was redacted.
+</ResponseField>
+
+**Example**:
+```json
+{
+  "timestamp": "2026-01-24T10:30:50.567Z",
+  "event": "DLP_MATCH",
+  "direction": "downstream",
+  "tool": "read_file",
+  "dlp_rule": "AWS Key",
+  "redacted": true
+}
+```
+
+### DLP_REQUEST_REDACTION (v1alpha2)
+
+Logged when DLP redacts content in a request.
+
+<ResponseField name="event" type="string" required>
+  Event type: `"DLP_REQUEST_REDACTION"`
+</ResponseField>
+
+<ResponseField name="forwarded" type="boolean" required>
+  Whether the redacted request was forwarded to the MCP server.
+</ResponseField>
+
+<ResponseField name="failure_reason" type="string">
+  If not forwarded, why redaction failed.
+</ResponseField>
+
+**Example**:
+```json
+{
+  "timestamp": "2026-01-24T10:30:45.123Z",
+  "event": "DLP_REQUEST_REDACTION",
+  "tool": "http_request",
+  "dlp_rule": "API Key",
+  "redaction_count": 1,
+  "forwarded": false,
+  "failure_reason": "argument_validation_failed"
+}
+```
+
+---
+
+## Querying Audit Logs
+
+### Using `jq`
+
+**Find all blocked requests**:
+```bash
+cat aip-audit.jsonl | jq 'select(.decision == "BLOCK")'
+```
+
+**Find violations in monitor mode**:
+```bash
+cat aip-audit.jsonl | jq 'select(.violation == true and .policy_mode == "monitor")'
+```
+
+**Count decisions by type**:
+```bash
+cat aip-audit.jsonl | jq -r '.decision' | sort | uniq -c
+```
+
+**Find all token validation failures**:
+```bash
+cat aip-audit.jsonl | jq 'select(.event == "TOKEN_VALIDATION_FAILED")'
+```
+
+**Track a specific session**:
+```bash
+cat aip-audit.jsonl | jq 'select(.session_id == "550e8400-e29b-41d4-a716-446655440000")'
+```
+
+### Using `grep`
+
+**Find DLP matches**:
+```bash
+grep '"event":"DLP_MATCH"' aip-audit.jsonl
+```
+
+**Find rate limited requests**:
+```bash
+grep '"decision":"RATE_LIMITED"' aip-audit.jsonl
+```
+
+### Log Aggregation
+
+AIP audit logs are compatible with:
+- **ELK Stack** (Elasticsearch, Logstash, Kibana)
+- **Splunk**
+- **DataDog**
+- **Grafana Loki**
+- **CloudWatch Logs**
+
+**Example Logstash config**:
+```ruby
+input {
+  file {
+    path => "/var/log/aip-audit.jsonl"
+    codec => "json"
+  }
+}
+
+filter {
+  date {
+    match => ["timestamp", "ISO8601"]
+  }
+}
+
+output {
+  elasticsearch {
+    hosts => ["localhost:9200"]
+    index => "aip-audit-%{+YYYY.MM.dd}"
+  }
+}
+```
+
+---
+
+## Compliance and Retention
+
+### Immutability
+
+Audit logs are **append-only**. Implementations must:
+- Never modify or delete existing log entries
+- Use atomic append operations
+- Protect log files with read-only permissions after writing
+
+### Retention Policies
+
+Recommended retention periods:
+
+| Use Case | Retention | Rationale |
+|----------|-----------|----------|
+| Development | 7 days | Short-term debugging |
+| Production | 90 days | Security incident response |
+| Compliance (SOC 2) | 1 year | Audit requirements |
+| Compliance (HIPAA) | 6 years | Legal requirements |
+
+### Sensitive Data
+
+**Best practices**:
+1. **Redact `args` field** in production logs
+2. **Encrypt log files at rest** (e.g., LUKS, AWS KMS)
+3. **Restrict log file access** to security team only
+4. **Use separate log sinks** for high-sensitivity environments
+
+**Example: Redact arguments**:
+```json
+{
+  "tool": "postgres_query",
+  "args": "[REDACTED]",
+  "decision": "ALLOW"
+}
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Policy YAML" icon="file-code" href="/reference/policy-yaml">
+    Configure audit log behavior in policy
+  </Card>
+  
+  <Card title="Error Codes" icon="code" href="/reference/error-codes">
+    Understand decision results
+  </Card>
+  
+  <Card title="Token Format" icon="key" href="/reference/token-format">
+    Identity token structure reference
+  </Card>
+  
+  <Card title="Monitoring" icon="chart-line" href="/deployment/production-best-practices">
+    Set up log aggregation and alerting
+  </Card>
+</CardGroup>

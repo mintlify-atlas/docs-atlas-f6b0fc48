@@ -1,0 +1,732 @@
+---
+title: "Production Best Practices"
+description: "Security hardening, policy management, monitoring, and operational guidelines for running AIP in production environments"
+---
+
+This guide covers operational best practices for running AIP in production. Whether you're deploying locally or in Kubernetes, these recommendations will help you harden security, maintain auditability, and ensure high availability.
+
+## Security Hardening
+
+### Policy File Protection
+
+The policy file is the root of trust for AIP. Compromising it means bypassing all authorization checks.
+
+<Warning>
+  **Critical**: AIP automatically protects the policy file from agent access, but you must secure it at the filesystem and deployment level.
+</Warning>
+
+#### Local Deployment
+
+```bash
+# Set restrictive permissions (owner read-only)
+chmod 400 /etc/aip/agent.yaml
+chown root:root /etc/aip/agent.yaml
+
+# Verify
+ls -la /etc/aip/agent.yaml
+# Expected: -r-------- 1 root root 1234 Mar 03 10:00 agent.yaml
+```
+
+#### Kubernetes Deployment
+
+Store policies in **Secrets** instead of ConfigMaps (encrypted at rest):
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-policy
+  namespace: default
+type: Opaque
+stringData:
+  policy.yaml: |
+    apiVersion: aip.io/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: production-agent
+    spec:
+      mode: enforce
+      allowed_tools:
+        - read_file
+```
+
+Mount as read-only volume:
+
+```yaml
+volumeMounts:
+  - name: aip-policy
+    mountPath: /etc/aip
+    readOnly: true  # Prevent writes
+volumes:
+  - name: aip-policy
+    secret:
+      secretName: agent-policy
+      defaultMode: 0400  # Read-only for owner
+```
+
+### Policy Signing (v1alpha2)
+
+Sign policies to prevent tampering:
+
+```bash
+# Generate signing key
+openssl genpkey -algorithm Ed25519 -out policy-signing-key.pem
+
+# Sign policy
+aip sign-policy --key policy-signing-key.pem --policy agent.yaml > agent.signed.yaml
+```
+
+The signed policy includes a cryptographic signature in metadata:
+
+```yaml
+metadata:
+  name: production-agent
+  signature: "ed25519:YWJjZGVm..."
+```
+
+AIP verifies the signature on load. Unsigned or tampered policies are rejected.
+
+<Tip>
+  Store signing keys in a secrets manager (AWS Secrets Manager, HashiCorp Vault, Kubernetes Secrets with encryption at rest).
+</Tip>
+
+### Principle of Least Privilege
+
+Start with minimal permissions and expand only as needed:
+
+<Steps>
+  <Step title="Deploy with an empty allowlist">
+    ```yaml
+    spec:
+      mode: monitor  # Don't block yet
+      allowed_tools: []  # Deny all by default
+    ```
+  </Step>
+
+  <Step title="Run for 24-48 hours and collect audit logs">
+    ```bash
+    # Identify all tools the agent attempted to use
+    cat aip-audit.jsonl | jq -r '.tool' | sort | uniq
+    ```
+  </Step>
+
+  <Step title="Add only the necessary tools to allowed_tools">
+    ```yaml
+    spec:
+      mode: enforce  # Now block violations
+      allowed_tools:
+        - read_file
+        - list_directory
+        - github_get_repo  # Only what's needed
+    ```
+  </Step>
+
+  <Step title="Review logs monthly and prune unused tools">
+    ```bash
+    # Find tools allowed but never used in 30 days
+    cat aip-audit.jsonl | jq -r 'select(.timestamp > "2026-02-01") | .tool' | sort | uniq
+    ```
+  </Step>
+</Steps>
+
+### DLP Pattern Hardening
+
+Use comprehensive DLP patterns to prevent exfiltration:
+
+```yaml
+spec:
+  dlp:
+    enabled: true
+    patterns:
+      # API Keys and Tokens
+      - name: "AWS Key"
+        regex: "(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}"
+      
+      - name: "GitHub Token"
+        regex: "gh[pousr]_[a-zA-Z0-9]{36,255}"
+      
+      - name: "OpenAI API Key"
+        regex: "sk-[a-zA-Z0-9]{48}"
+      
+      - name: "Stripe Key"
+        regex: "sk_(test|live)_[a-zA-Z0-9]{24,99}"
+      
+      # PII
+      - name: "Email Address"
+        regex: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+      
+      - name: "SSN"
+        regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+      
+      - name: "Credit Card"
+        regex: "\\b(?:\\d{4}[- ]?){3}\\d{4}\\b"
+      
+      # Private Keys
+      - name: "Private Key"
+        regex: "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+      
+      # Internal URLs
+      - name: "Internal IP"
+        regex: "\\b(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.)\\d{1,3}\\.\\d{1,3}\\b"
+```
+
+<Warning>
+  DLP patterns must use RE2 syntax (not PCRE). Test patterns before deployment:
+  ```bash
+  echo "AKIAIOSFODNN7EXAMPLE" | grep -P "AKIA[A-Z0-9]{16}"
+  ```
+</Warning>
+
+### Protected Paths
+
+Block access to sensitive files and directories:
+
+```yaml
+spec:
+  protected_paths:
+    # SSH keys
+    - ~/.ssh
+    - /root/.ssh
+    
+    # Cloud credentials
+    - ~/.aws/credentials
+    - ~/.config/gcloud
+    - ~/.azure
+    
+    # Environment files
+    - .env
+    - .env.local
+    - .env.production
+    
+    # Package manager credentials
+    - ~/.npmrc
+    - ~/.pypirc
+    - ~/.docker/config.json
+    
+    # Database credentials
+    - /etc/postgresql
+    - /var/lib/mysql
+```
+
+AIP automatically blocks any tool argument containing these paths.
+
+## Policy Management
+
+### Versioning and Change Control
+
+Treat policies as infrastructure-as-code:
+
+```yaml
+metadata:
+  name: production-agent
+  version: "2.1.0"  # Semantic versioning
+  owner: security-team@company.com
+spec:
+  # ...
+```
+
+**Recommended workflow**:
+
+1. Store policies in Git
+2. Require pull requests for changes
+3. Run conformance tests in CI/CD
+4. Tag releases (e.g., `v2.1.0`)
+5. Deploy via GitOps (ArgoCD, Flux)
+
+### Policy Review Cadence
+
+| Frequency | Review Type | Action |
+|-----------|-------------|--------|
+| **Weekly** | Audit log review | Check for unexpected tool usage |
+| **Monthly** | Permission pruning | Remove unused tools from `allowed_tools` |
+| **Quarterly** | DLP pattern updates | Add new secret patterns (e.g., new API key formats) |
+| **Annually** | Full security audit | External review of policy logic |
+
+### Environment-Specific Policies
+
+Use separate policies for dev, staging, and production:
+
+```bash
+# Development (monitor mode)
+policies/dev/agent.yaml
+
+# Staging (enforce with logging)
+policies/staging/agent.yaml
+
+# Production (enforce + DLP + rate limits)
+policies/production/agent.yaml
+```
+
+Example production policy (stricter than dev):
+
+```yaml
+# policies/production/agent.yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: production-agent
+  version: "2.0.0"
+spec:
+  mode: enforce  # Never use monitor in production
+  allowed_tools:
+    - read_file
+    - github_get_repo
+  tool_rules:
+    - tool: github_create_pull
+      action: ask  # Human approval required
+      rate_limit: "5/hour"
+  dlp:
+    enabled: true
+    patterns:
+      - name: "Production Database URL"
+        regex: "postgres://.*@prod-db\\."
+```
+
+## Monitoring and Alerting
+
+### Audit Log Monitoring
+
+#### Critical Events to Alert On
+
+<CodeGroup>
+```bash Blocked Requests Spike
+# Alert if >10 blocked requests in 5 minutes
+cat aip-audit.jsonl | jq -r 'select(.decision == "BLOCK")' | wc -l
+```
+
+```bash DLP Redactions
+# Alert on ANY DLP redaction (sign of exfiltration attempt)
+cat aip-audit.jsonl | jq 'select(.event == "DLP_TRIGGERED")'
+```
+
+```bash Policy Violations in Monitor Mode
+# Monitor mode violations = things that WOULD be blocked in enforce
+cat aip-audit.jsonl | jq 'select(.violation == true and .policy_mode == "monitor")'
+```
+
+```bash Human Denials
+# Track when humans deny agent requests (unexpected behavior)
+cat aip-audit.jsonl | jq 'select(.decision == "USER_DENIED")'
+```
+</CodeGroup>
+
+#### Prometheus Alerting Rules
+
+For Kubernetes deployments:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aip-alerts
+  namespace: aip-system
+spec:
+  groups:
+    - name: aip_policy_violations
+      interval: 1m
+      rules:
+        - alert: AIPHighBlockRate
+          expr: rate(aip_policy_decisions{decision="BLOCK"}[5m]) > 0.1
+          for: 5m
+          annotations:
+            summary: "High rate of blocked agent requests"
+            description: "Agent {{ $labels.agent }} has {{ $value }} blocked requests/sec"
+        
+        - alert: AIPDLPTriggered
+          expr: increase(aip_dlp_redactions_total[5m]) > 0
+          for: 1m
+          annotations:
+            summary: "DLP pattern matched in agent response"
+            description: "Rule {{ $labels.rule }} triggered in agent {{ $labels.agent }}"
+        
+        - alert: AIPPolicyLoadFailed
+          expr: aip_policy_load_errors_total > 0
+          for: 1m
+          annotations:
+            summary: "AIP sidecar failed to load policy"
+            description: "Check policy syntax and signature"
+```
+
+### Centralized Logging
+
+Forward audit logs to a SIEM or log aggregator:
+
+#### Splunk
+
+```bash
+# Forward JSONL logs to Splunk HEC
+curl -X POST https://splunk.company.com:8088/services/collector \
+  -H "Authorization: Splunk <HEC-TOKEN>" \
+  -d @aip-audit.jsonl
+```
+
+#### Elasticsearch
+
+```bash
+# Bulk import to Elasticsearch
+cat aip-audit.jsonl | jq -c '{"index": {"_index": "aip-audit"}}, .' | \
+  curl -X POST http://elasticsearch:9200/_bulk \
+    -H 'Content-Type: application/x-ndjson' \
+    --data-binary @-
+```
+
+#### AWS CloudWatch
+
+```bash
+# Stream logs to CloudWatch
+aws logs put-log-events \
+  --log-group-name /aip/audit \
+  --log-stream-name $(hostname) \
+  --log-events file://aip-audit.jsonl
+```
+
+### Compliance Reporting
+
+Generate compliance reports from audit logs:
+
+```bash
+# SOC 2: Who accessed what, when?
+cat aip-audit.jsonl | jq -r '[.timestamp, .tool, .decision] | @csv'
+
+# GDPR: All actions on customer data
+cat aip-audit.jsonl | jq 'select(.args.user_id != null)'
+
+# HIPAA: All access to PHI
+cat aip-audit.jsonl | jq 'select(.tool == "read_patient_record")'
+```
+
+## High Availability
+
+### Local Deployment HA
+
+For critical agents, run AIP in a supervisor that restarts on failure:
+
+```bash
+# systemd unit file: /etc/systemd/system/aip-proxy.service
+[Unit]
+Description=AIP Proxy for Production Agent
+After=network.target
+
+[Service]
+Type=simple
+User=aip
+ExecStart=/usr/local/bin/aip --target "python /opt/agent/server.py" --policy /etc/aip/agent.yaml
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable:
+```bash
+sudo systemctl enable aip-proxy
+sudo systemctl start aip-proxy
+```
+
+### Kubernetes HA
+
+Sidecars inherit pod-level HA from Kubernetes:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+spec:
+  replicas: 3  # Multiple instances for HA
+  template:
+    spec:
+      containers:
+        - name: aip-proxy
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9091
+            initialDelaySeconds: 3
+            periodSeconds: 5
+```
+
+### Failure Modes
+
+Configure fail-closed behavior:
+
+```yaml
+spec:
+  mode: enforce
+  failover:
+    on_policy_load_error: block  # Block all if policy invalid
+    on_regex_error: block        # Block if regex patterns fail to compile
+    on_dlp_error: allow          # Allow if DLP scanner crashes (performance vs security)
+```
+
+<Warning>
+  **Never use `failover: allow` in production.** Always fail-closed to prevent bypass.
+</Warning>
+
+## Key Rotation and Credential Management
+
+### Policy Signing Key Rotation
+
+<Steps>
+  <Step title="Generate new signing key">
+    ```bash
+    openssl genpkey -algorithm Ed25519 -out policy-signing-key-v2.pem
+    ```
+  </Step>
+
+  <Step title="Re-sign all policies with new key">
+    ```bash
+    for policy in policies/*.yaml; do
+      aip sign-policy --key policy-signing-key-v2.pem --policy $policy > ${policy}.signed
+    done
+    ```
+  </Step>
+
+  <Step title="Update AIP proxy to trust both keys (grace period)">
+    ```bash
+    aip --policy agent.yaml --trusted-keys key-v1.pub,key-v2.pub
+    ```
+  </Step>
+
+  <Step title="After 30 days, remove old key">
+    ```bash
+    aip --policy agent.yaml --trusted-keys key-v2.pub
+    ```
+  </Step>
+</Steps>
+
+### MCP Server Credential Rotation
+
+When rotating credentials for MCP servers (e.g., GitHub tokens):
+
+1. **Update DLP patterns** to detect the old token format
+2. **Rotate the secret** in your secrets manager
+3. **Restart agents** to pick up new credentials
+4. **Monitor audit logs** for old token usage (should be zero)
+
+```yaml
+# Add old token format to DLP to detect leaks
+dlp:
+  patterns:
+    - name: "GitHub Token (OLD - REVOKED)"
+      regex: "ghp_OldTokenPattern123456"
+```
+
+## Performance Optimization
+
+### Policy Evaluation Latency
+
+AIP policy evaluation is designed to be less than 1ms per request. Optimize further:
+
+#### Reduce Regex Complexity
+
+```yaml
+# Slow (catastrophic backtracking risk)
+allow_args:
+  url: "(https?://)?(www\\.)?(github\\.com|gitlab\\.com|bitbucket\\.org)/.*"
+
+# Fast (linear time)
+allow_args:
+  url: "^https://github\\.com/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$"
+```
+
+#### Cache Policy Evaluation Results
+
+For Kubernetes deployments with high request volume:
+
+```yaml
+sidecar:
+  cache:
+    enabled: true
+    ttl: "5m"  # Cache allow/block decisions
+    max_entries: 10000
+```
+
+<Tip>
+  Only enable caching for deterministic policies (no `action: ask` or time-based rules).
+</Tip>
+
+### DLP Scanning Performance
+
+DLP scanning can add latency for large responses:
+
+```yaml
+dlp:
+  enabled: true
+  max_scan_size: "1MB"  # Skip DLP for responses >1MB
+  timeout: "100ms"      # Fail-open if scan takes >100ms
+```
+
+### Audit Log Performance
+
+Rotate logs frequently to prevent I/O bottlenecks:
+
+```bash
+# Rotate daily
+0 0 * * * mv /var/log/aip/audit.jsonl /var/log/aip/audit-$(date +\%Y\%m\%d).jsonl
+```
+
+Use async log shipping to avoid blocking requests:
+
+```yaml
+audit:
+  async: true  # Write logs in background thread
+  buffer_size: 1000  # Buffer up to 1000 entries
+```
+
+## Disaster Recovery
+
+### Backup Policies
+
+Store policy backups in version control and object storage:
+
+```bash
+# Automated daily backup
+0 2 * * * kubectl get agentpolicies -A -o yaml > /backups/aip-policies-$(date +\%Y\%m\%d).yaml
+0 2 * * * aws s3 cp /backups/aip-policies-$(date +\%Y\%m\%d).yaml s3://backups/aip/
+```
+
+### Audit Log Retention
+
+Comply with regulatory requirements:
+
+| Regulation | Minimum Retention | Recommended Storage |
+|------------|-------------------|---------------------|
+| **SOC 2** | 1 year | S3 Glacier |
+| **GDPR** | 6 months | Encrypted EBS/S3 |
+| **HIPAA** | 6 years | WORM storage (AWS S3 Object Lock) |
+| **SOX** | 7 years | Immutable storage |
+
+Example S3 lifecycle policy:
+
+```json
+{
+  "Rules": [
+    {
+      "Id": "archive-aip-logs",
+      "Status": "Enabled",
+      "Transitions": [
+        {
+          "Days": 90,
+          "StorageClass": "GLACIER"
+        },
+        {
+          "Days": 365,
+          "StorageClass": "DEEP_ARCHIVE"
+        }
+      ],
+      "Expiration": {
+        "Days": 2555
+      }
+    }
+  ]
+}
+```
+
+### Recovery Testing
+
+Quarterly DR drills:
+
+1. **Delete all policies** in staging environment
+2. **Restore from backup** within SLA (e.g., 15 minutes)
+3. **Verify audit logs** are intact and queryable
+4. **Test agent functionality** after restore
+
+## Security Incident Response
+
+### Suspected Policy Bypass
+
+<Steps>
+  <Step title="Immediately switch to monitor mode">
+    ```bash
+    kubectl patch agentpolicy production-agent --type=merge -p '{"spec":{"mode":"monitor"}}'
+    ```
+    This logs all requests without blocking (preserves forensic evidence).
+  </Step>
+
+  <Step title="Export audit logs for analysis">
+    ```bash
+    kubectl logs -l app=agent -c aip-proxy --since=24h > incident-logs.jsonl
+    ```
+  </Step>
+
+  <Step title="Identify the bypass vector">
+    ```bash
+    # Look for unexpected tools being allowed
+    cat incident-logs.jsonl | jq 'select(.decision == "ALLOW" and (.tool | IN("exec_command", "delete_file")))'
+    ```
+  </Step>
+
+  <Step title="Patch the policy and redeploy">
+    ```bash
+    # Add explicit block rule
+    kubectl edit agentpolicy production-agent
+    # Switch back to enforce mode
+    kubectl patch agentpolicy production-agent --type=merge -p '{"spec":{"mode":"enforce"}}'
+    ```
+  </Step>
+</Steps>
+
+### DLP Leak Detection
+
+If DLP detects a secret in agent output:
+
+1. **Revoke the secret immediately** (GitHub token, API key, etc.)
+2. **Audit all requests** from that agent in the past 7 days
+3. **Check for exfiltration** (did the secret appear in logs, external services?)
+4. **Root cause analysis**: Why did the agent access the secret?
+
+## Operational Checklists
+
+### Pre-Deployment Checklist
+
+- [ ] Policy file has restrictive permissions (chmod 400)
+- [ ] Policy is signed with Ed25519 key
+- [ ] DLP patterns cover all known secret formats
+- [ ] Audit logging is enabled and forwarded to SIEM
+- [ ] Alerts configured for policy violations and DLP triggers
+- [ ] `mode: enforce` is set (not monitor)
+- [ ] Protected paths include SSH keys, cloud credentials, .env files
+- [ ] Backup and recovery procedures tested
+
+### Monthly Review Checklist
+
+- [ ] Review blocked requests for false positives
+- [ ] Prune unused tools from `allowed_tools`
+- [ ] Update DLP patterns for new secret formats
+- [ ] Verify audit log retention meets compliance requirements
+- [ ] Check for policy drift (prod vs staging)
+- [ ] Review and rotate policy signing keys if >90 days old
+
+### Quarterly Security Audit Checklist
+
+- [ ] Penetration test: Attempt policy bypass
+- [ ] Review all `action: ask` approvals (were they legitimate?)
+- [ ] Analyze DLP redaction patterns (new threat vectors?)
+- [ ] Validate NetworkPolicy rules still align with AIP policy
+- [ ] Disaster recovery drill (restore policies and logs from backup)
+- [ ] External security review of policy logic
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Local Deployment" icon="laptop-code" href="/deployment/local-proxy">
+    Run AIP on your local machine
+  </Card>
+  <Card title="Kubernetes Deployment" icon="dharmachakra" href="/deployment/kubernetes-sidecar">
+    Deploy AIP in Kubernetes with sidecar pattern
+  </Card>
+  <Card title="Policy Reference" icon="file-code" href="/reference/policy-yaml">
+    Complete policy schema and examples
+  </Card>
+  <Card title="Security Policy" icon="shield-halved" href="/community/security-policy">
+    Report vulnerabilities responsibly
+  </Card>
+</CardGroup>

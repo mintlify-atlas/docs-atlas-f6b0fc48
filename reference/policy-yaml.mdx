@@ -1,0 +1,749 @@
+---
+title: "Policy YAML Reference"
+description: "Complete field-by-field reference for AIP policy documents"
+---
+
+Complete reference for the Agent Policy YAML format. This page documents every field in the `agent.yaml` policy document.
+
+## Document Structure
+
+An AIP policy document has four top-level sections:
+
+```yaml
+apiVersion: aip.io/v1alpha2
+kind: AgentPolicy
+metadata:
+  # Policy identification and signatures
+spec:
+  # Policy rules and configuration
+```
+
+---
+
+## Top-Level Fields
+
+<ParamField path="apiVersion" type="string" required>
+  The API version of the policy schema. **Must be** `aip.io/v1alpha2`.
+  
+  Implementations will reject policies with unknown API versions.
+</ParamField>
+
+<ParamField path="kind" type="string" required>
+  The type of policy document. **Must be** `AgentPolicy`.
+</ParamField>
+
+---
+
+## Metadata Fields
+
+The `metadata` section identifies the policy and provides integrity verification.
+
+<ParamField path="metadata.name" type="string" required>
+  Unique identifier for this policy. Used as the default `audience` for identity tokens.
+  
+  ```yaml
+  metadata:
+    name: "production-agent"
+  ```
+</ParamField>
+
+<ParamField path="metadata.version" type="string">
+  Semantic version of the policy (e.g., `"1.0.0"`, `"2.1.3"`).
+  
+  ```yaml
+  metadata:
+    version: "2.1.0"
+  ```
+</ParamField>
+
+<ParamField path="metadata.owner" type="string">
+  Contact email for policy questions.
+  
+  ```yaml
+  metadata:
+    owner: "security-team@company.com"
+  ```
+</ParamField>
+
+<ParamField path="metadata.signature" type="string">
+  **v1alpha2 feature**. Cryptographic signature for policy integrity.
+  
+  **Format**: `<algorithm>:<base64-signature>`
+  
+  **Supported algorithms**:
+  - `ed25519` - Ed25519 signature (RECOMMENDED)
+  
+  When present, implementations MUST verify the signature before applying the policy.
+  
+  ```yaml
+  metadata:
+    signature: "ed25519:YWJjZGVm..."
+  ```
+</ParamField>
+
+---
+
+## Spec Fields
+
+The `spec` section contains the policy rules and enforcement configuration.
+
+### Enforcement Mode
+
+<ParamField path="spec.mode" type="string" default="enforce">
+  Controls whether policy violations are blocked or just logged.
+  
+  | Value | Behavior |
+  |-------|----------|
+  | `enforce` | Block violations (default) |
+  | `monitor` | Log violations but allow through |
+  
+  **Use case**: Set to `monitor` to dry-run new policies before enforcement.
+  
+  ```yaml
+  spec:
+    mode: enforce
+  ```
+</ParamField>
+
+### Tool Authorization
+
+<ParamField path="spec.allowed_tools" type="array<string>">
+  Allowlist of tool names the agent may invoke. Tool names must exactly match the MCP server's tool list.
+  
+  **Default behavior**: If a tool is not in this list AND not in `tool_rules` with `action: allow`, it will be blocked.
+  
+  ```yaml
+  spec:
+    allowed_tools:
+      - github_get_repo
+      - read_file
+      - list_directory
+  ```
+</ParamField>
+
+### Method Authorization
+
+<ParamField path="spec.allowed_methods" type="array<string>">
+  Allowlist of JSON-RPC methods permitted. If not specified, implementations use a default safe list.
+  
+  **Default safe list** (when not specified):
+  - `initialize`, `initialized`, `ping`
+  - `tools/call`, `tools/list`
+  - `completion/complete`
+  - `notifications/*`
+  - `cancelled`
+  
+  The wildcard `*` allows all methods.
+  
+  ```yaml
+  spec:
+    allowed_methods:
+      - initialize
+      - tools/call
+      - tools/list
+  ```
+</ParamField>
+
+<ParamField path="spec.denied_methods" type="array<string>">
+  Explicit denylist of JSON-RPC methods. Denied methods take precedence over allowed methods.
+  
+  ```yaml
+  spec:
+    denied_methods:
+      - resources/read
+      - resources/write
+  ```
+</ParamField>
+
+### Path Protection
+
+<ParamField path="spec.protected_paths" type="array<string>">
+  File paths that tools **must not** access. Any tool argument containing a protected path will be blocked.
+  
+  **Automatic protections**:
+  - The policy file itself is automatically protected
+  - `~` is expanded to the user's home directory
+  
+  ```yaml
+  spec:
+    protected_paths:
+      - ~/.ssh
+      - ~/.aws/credentials
+      - .env
+  ```
+</ParamField>
+
+<ParamField path="spec.strict_args_default" type="boolean" default={false}>
+  When `true`, tool rules reject arguments not explicitly declared in `allow_args`.
+  
+  ```yaml
+  spec:
+    strict_args_default: true
+  ```
+</ParamField>
+
+---
+
+## Tool Rules
+
+The `spec.tool_rules` array provides fine-grained control over individual tools.
+
+<ParamField path="spec.tool_rules[]" type="array<ToolRule>">
+  Array of tool-specific rules.
+</ParamField>
+
+### ToolRule Fields
+
+<ParamField path="tool_rules[].tool" type="string" required>
+  Tool name this rule applies to. Must match exactly.
+  
+  ```yaml
+  tool_rules:
+    - tool: github_delete_repo
+  ```
+</ParamField>
+
+<ParamField path="tool_rules[].action" type="string" default="allow">
+  Action to take when this tool is called.
+  
+  | Value | Behavior |
+  |-------|----------|
+  | `allow` | Permit (subject to argument validation) |
+  | `block` | Deny unconditionally |
+  | `ask` | Require interactive user approval |
+  
+  ```yaml
+  tool_rules:
+    - tool: deploy_production
+      action: ask  # Human-in-the-loop
+  ```
+</ParamField>
+
+<ParamField path="tool_rules[].rate_limit" type="string">
+  Rate limit for this tool. Format: `<count>/<period>`
+  
+  **Supported periods**: `second`, `minute`, `hour` (or `s`, `m`, `h`)
+  
+  When exceeded, requests return error code `-32002`.
+  
+  ```yaml
+  tool_rules:
+    - tool: list_gpus
+      rate_limit: "10/minute"
+  ```
+</ParamField>
+
+<ParamField path="tool_rules[].strict_args" type="boolean">
+  Override `strict_args_default` for this specific tool.
+  
+  ```yaml
+  tool_rules:
+    - tool: exec_command
+      strict_args: true
+  ```
+</ParamField>
+
+<ParamField path="tool_rules[].schema_hash" type="string">
+  **v1alpha2 feature**. Cryptographic hash of the tool's schema to prevent tool poisoning.
+  
+  **Format**: `<algorithm>:<hex-digest>`
+  
+  **Supported algorithms**: `sha256`, `sha384`, `sha512`
+  
+  If the tool's schema changes, requests return error code `-32013`.
+  
+  ```yaml
+  tool_rules:
+    - tool: read_file
+      schema_hash: "sha256:a3c7f2e8d9b4f1e2c8a7d6f3e9b2c4f1..."
+  ```
+</ParamField>
+
+<ParamField path="tool_rules[].allow_args" type="object">
+  Argument validation patterns. Maps argument names to regex patterns.
+  
+  **Validation rules**:
+  - Regex must match the entire argument value
+  - Uses RE2-compatible regex syntax
+  - If any pattern fails, the request is blocked
+  - Missing constrained arguments are treated as violations
+  
+  ```yaml
+  tool_rules:
+    - tool: postgres_query
+      allow_args:
+        query: "^SELECT\\s+.*"  # Only SELECT queries
+    
+    - tool: http_request
+      allow_args:
+        url: "^https://github\\.com/.*"
+  ```
+</ParamField>
+
+---
+
+## DLP Configuration
+
+Data Loss Prevention scanning detects and redacts sensitive data in tool responses (and optionally requests).
+
+<ParamField path="spec.dlp" type="DLPConfig">
+  DLP configuration block.
+</ParamField>
+
+<ParamField path="dlp.enabled" type="boolean" default={true}>
+  Enable DLP scanning. Defaults to `true` when the `dlp` block is present.
+  
+  ```yaml
+  spec:
+    dlp:
+      enabled: true
+  ```
+</ParamField>
+
+<ParamField path="dlp.scan_requests" type="boolean" default={false}>
+  **v1alpha2 feature**. Scan tool arguments before forwarding.
+  
+  **Use case**: Prevent data exfiltration via arguments (e.g., secrets embedded in API queries).
+  
+  ```yaml
+  dlp:
+    scan_requests: true
+  ```
+</ParamField>
+
+<ParamField path="dlp.scan_responses" type="boolean" default={true}>
+  Scan tool responses for sensitive data.
+  
+  ```yaml
+  dlp:
+    scan_responses: true
+  ```
+</ParamField>
+
+<ParamField path="dlp.max_scan_size" type="string" default="1MB">
+  **v1alpha2 feature**. Maximum content size to scan per request/response.
+  
+  Content exceeding this limit is truncated for scanning (first N bytes only).
+  
+  **Format**: Size string (e.g., `"1MB"`, `"512KB"`, `"10MB"`)
+  
+  ```yaml
+  dlp:
+    max_scan_size: "5MB"
+  ```
+</ParamField>
+
+<ParamField path="dlp.on_request_match" type="string" default="block">
+  **v1alpha2 feature**. Action when DLP pattern matches in a request.
+  
+  | Value | Behavior |
+  |-------|----------|
+  | `block` | Reject with error `-32001` |
+  | `redact` | Replace matched content and forward |
+  | `warn` | Log warning and forward unchanged |
+  
+  ```yaml
+  dlp:
+    on_request_match: "block"
+  ```
+</ParamField>
+
+<ParamField path="dlp.detect_encoding" type="boolean" default={false}>
+  Detect and scan base64-encoded content.
+  
+  ```yaml
+  dlp:
+    detect_encoding: true
+  ```
+</ParamField>
+
+<ParamField path="dlp.filter_stderr" type="boolean" default={false}>
+  Scan stderr output from tools.
+  
+  ```yaml
+  dlp:
+    filter_stderr: true
+  ```
+</ParamField>
+
+<ParamField path="dlp.patterns[]" type="array<Pattern>">
+  Array of regex patterns to detect.
+</ParamField>
+
+### DLP Pattern Fields
+
+<ParamField path="patterns[].name" type="string" required>
+  Rule identifier for audit logs and redaction markers.
+  
+  Matched content is replaced with `[REDACTED:<name>]`
+</ParamField>
+
+<ParamField path="patterns[].regex" type="string" required>
+  RE2-compatible regex pattern.
+  
+  **Built-in patterns**:
+  
+  <CodeGroup>
+  ```yaml API Keys
+  patterns:
+    - name: "AWS Key"
+      regex: "(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}"
+    
+    - name: "GitHub Token"
+      regex: "ghp_[a-zA-Z0-9]{36}"
+    
+    - name: "Generic Secret"
+      regex: "(?i)(api_key|secret|password)\\s*[:=]\\s*['\"]?([a-zA-Z0-9-_]+)['\"]?"
+  ```
+  
+  ```yaml PII
+  patterns:
+    - name: "Email"
+      regex: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    
+    - name: "SSN"
+      regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    
+    - name: "Credit Card"
+      regex: "\\b(?:\\d{4}[- ]?){3}\\d{4}\\b"
+  ```
+  
+  ```yaml Secrets
+  patterns:
+    - name: "Private Key"
+      regex: "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+  ```
+  </CodeGroup>
+</ParamField>
+
+<ParamField path="patterns[].scope" type="string" default="all">
+  **v1alpha2 feature**. Where to apply this pattern.
+  
+  | Value | Description |
+  |-------|-------------|
+  | `all` | Scan both requests and responses |
+  | `request` | Only scan requests |
+  | `response` | Only scan responses |
+  
+  ```yaml
+  patterns:
+    - name: "SQL Injection"
+      regex: "(?i)(DROP|DELETE|TRUNCATE)\\s+TABLE"
+      scope: "request"  # Detect exfiltration attempts
+  ```
+</ParamField>
+
+---
+
+## Identity Configuration (v1alpha2)
+
+Agent identity and session management features.
+
+<ParamField path="spec.identity" type="IdentityConfig">
+  Identity configuration block.
+</ParamField>
+
+<ParamField path="identity.enabled" type="boolean" default={false}>
+  Enable identity token generation and management.
+  
+  ```yaml
+  spec:
+    identity:
+      enabled: true
+  ```
+</ParamField>
+
+<ParamField path="identity.token_ttl" type="duration" default="5m">
+  Token time-to-live. Format: Go duration string (e.g., `"5m"`, `"1h"`, `"300s"`).
+  
+  **Recommended**: 5-15 minutes to limit token theft window.
+  
+  ```yaml
+  identity:
+    token_ttl: "10m"
+  ```
+</ParamField>
+
+<ParamField path="identity.rotation_interval" type="duration" default="4m">
+  How often to rotate tokens before expiry.
+  
+  **Constraint**: Must be less than `token_ttl`.
+  
+  ```yaml
+  identity:
+    rotation_interval: "8m"
+  ```
+</ParamField>
+
+<ParamField path="identity.require_token" type="boolean" default={false}>
+  When `true`, all tool calls MUST include a valid identity token.
+  
+  Requests without tokens are rejected with error code `-32008`.
+  
+  ```yaml
+  identity:
+    require_token: true
+  ```
+</ParamField>
+
+<ParamField path="identity.session_binding" type="string" default="process">
+  Session binding mode.
+  
+  | Value | Binding |
+  |-------|----------|
+  | `process` | Bound to OS process ID |
+  | `policy` | Bound to policy hash |
+  | `strict` | Bound to process + policy + hostname |
+  
+  ```yaml
+  identity:
+    session_binding: "strict"
+  ```
+</ParamField>
+
+<ParamField path="identity.audience" type="string">
+  Intended audience for identity tokens. Defaults to `metadata.name`.
+  
+  **Purpose**: Prevents tokens issued for one MCP server from being accepted by another.
+  
+  ```yaml
+  identity:
+    audience: "https://mcp.example.com/api"
+  ```
+</ParamField>
+
+<ParamField path="identity.nonce_window" type="duration">
+  Duration to retain nonces for replay detection. Defaults to `token_ttl`.
+  
+  ```yaml
+  identity:
+    nonce_window: "10m"
+  ```
+</ParamField>
+
+<ParamField path="identity.policy_transition_grace" type="duration" default="0s">
+  Grace period for tokens with old policy hash after policy update.
+  
+  ```yaml
+  identity:
+    policy_transition_grace: "2m"
+  ```
+</ParamField>
+
+---
+
+## Server Configuration (v1alpha2)
+
+HTTP server for remote validation endpoints.
+
+<ParamField path="spec.server" type="ServerConfig">
+  Server configuration block.
+</ParamField>
+
+<ParamField path="server.enabled" type="boolean" default={false}>
+  Enable HTTP server for remote validation.
+  
+  ```yaml
+  spec:
+    server:
+      enabled: true
+  ```
+</ParamField>
+
+<ParamField path="server.listen" type="string" default="127.0.0.1:9443">
+  Bind address and port. Format: `<host>:<port>`
+  
+  **Security**: Binding to `0.0.0.0` requires TLS configuration.
+  
+  ```yaml
+  server:
+    listen: "127.0.0.1:9443"
+  ```
+</ParamField>
+
+<ParamField path="server.failover_mode" type="string" default="fail_closed">
+  Behavior when validation server is unreachable.
+  
+  | Value | Behavior | Security |
+  |-------|----------|----------|
+  | `fail_closed` | Deny all requests | High |
+  | `fail_open` | Allow all requests | Low |
+  | `local_policy` | Fall back to local policy | Medium |
+  
+  ```yaml
+  server:
+    failover_mode: "fail_closed"
+  ```
+</ParamField>
+
+<ParamField path="server.timeout" type="duration" default="5s">
+  Maximum time to wait for server response.
+  
+  ```yaml
+  server:
+    timeout: "3s"
+  ```
+</ParamField>
+
+<ParamField path="server.tls" type="TLSConfig">
+  TLS configuration. **Required** when `listen` is not localhost.
+</ParamField>
+
+<ParamField path="server.tls.cert" type="string">
+  Path to TLS certificate file (PEM format).
+  
+  ```yaml
+  server:
+    tls:
+      cert: "/path/to/cert.pem"
+      key: "/path/to/key.pem"
+  ```
+</ParamField>
+
+<ParamField path="server.tls.key" type="string">
+  Path to TLS private key file (PEM format).
+</ParamField>
+
+---
+
+## Complete Example
+
+<CodeGroup>
+```yaml Production Policy
+apiVersion: aip.io/v1alpha2
+kind: AgentPolicy
+metadata:
+  name: production-agent
+  version: "2.0.0"
+  owner: security@company.com
+  signature: "ed25519:YWJjZGVm..."
+
+spec:
+  mode: enforce
+  
+  allowed_tools:
+    - github_get_repo
+    - github_list_pulls
+    - read_file
+    - list_directory
+  
+  tool_rules:
+    - tool: github_delete_repo
+      action: block
+    
+    - tool: deploy_production
+      action: ask
+    
+    - tool: postgres_query
+      action: allow
+      rate_limit: "100/minute"
+      allow_args:
+        query: "^SELECT\\s+.*"
+  
+  protected_paths:
+    - ~/.ssh
+    - ~/.aws/credentials
+    - .env
+  
+  dlp:
+    scan_requests: true
+    scan_responses: true
+    patterns:
+      - name: "AWS Key"
+        regex: "AKIA[A-Z0-9]{16}"
+      - name: "GitHub Token"
+        regex: "ghp_[a-zA-Z0-9]{36}"
+  
+  identity:
+    enabled: true
+    token_ttl: "10m"
+    rotation_interval: "8m"
+    require_token: true
+    session_binding: "policy"
+  
+  server:
+    enabled: true
+    listen: "0.0.0.0:9443"
+    failover_mode: "fail_closed"
+    tls:
+      cert: "/etc/aip/cert.pem"
+      key: "/etc/aip/key.pem"
+```
+
+```yaml Read-Only Policy
+apiVersion: aip.io/v1alpha2
+kind: AgentPolicy
+metadata:
+  name: read-only
+
+spec:
+  mode: enforce
+  
+  allowed_tools:
+    - read_file
+    - list_directory
+    - search_files
+  
+  tool_rules:
+    - tool: write_file
+      action: block
+    - tool: delete_file
+      action: block
+    - tool: exec_command
+      action: block
+```
+
+```yaml Monitor Mode (Testing)
+apiVersion: aip.io/v1alpha2
+kind: AgentPolicy
+metadata:
+  name: test-policy
+
+spec:
+  mode: monitor  # Log only, don't block
+  
+  allowed_tools:
+    - read_file
+    - write_file
+  
+  tool_rules:
+    - tool: delete_file
+      action: block  # Will log violation but allow
+```
+</CodeGroup>
+
+---
+
+## Validation
+
+Common policy validation errors:
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `invalid apiVersion` | Wrong API version | Use `aip.io/v1alpha2` |
+| `empty allowed_tools` | No tools specified | Add tools or tool_rules |
+| `invalid regex` | Bad regex pattern | Validate regex syntax |
+| `invalid rate_limit` | Wrong format | Use `<N>/<period>` |
+| `rotation_interval >= token_ttl` | Rotation must happen before expiry | Reduce rotation_interval |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Error Codes" icon="code" href="/reference/error-codes">
+    JSON-RPC error codes reference
+  </Card>
+  
+  <Card title="Audit Format" icon="file-lines" href="/reference/audit-format">
+    Audit log format specification
+  </Card>
+  
+  <Card title="Token Format" icon="key" href="/reference/token-format">
+    AAT token structure and claims
+  </Card>
+  
+  <Card title="Examples" icon="rocket" href="/quickstart">
+    Example policies for common use cases
+  </Card>
+</CardGroup>

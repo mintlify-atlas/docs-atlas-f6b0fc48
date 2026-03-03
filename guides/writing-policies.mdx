@@ -1,0 +1,376 @@
+---
+title: Writing Policies
+description: Create effective AIP policies to secure your AI agents
+---
+
+AIP policies are declarative YAML files that define what tools an agent can use and under what conditions. This guide teaches you how to write secure, maintainable policies.
+
+## Policy Structure
+
+Every AIP policy follows this structure:
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: string           # Policy identifier
+  version: string        # Semantic version (optional)
+  owner: string          # Contact email (optional)
+spec:
+  mode: enforce | monitor
+  allowed_tools: [string]
+  tool_rules: [ToolRule]
+  dlp: DLPConfig
+```
+
+## Design Principle: Default Deny
+
+**If a tool is not explicitly allowed, it's blocked.**
+
+This fail-closed approach ensures agents can't access tools you haven't reviewed.
+
+## Metadata
+
+<ParamField path="metadata.name" type="string" required>
+  Unique identifier for this policy. Used in audit logs.
+</ParamField>
+
+<ParamField path="metadata.version" type="string">
+  Semantic version (e.g., "2.1.0"). Useful for policy versioning.
+</ParamField>
+
+<ParamField path="metadata.owner" type="string">
+  Contact email for policy questions.
+</ParamField>
+
+Example:
+
+```yaml
+metadata:
+  name: code-review-agent
+  version: "2.1.0"
+  owner: platform-team@company.com
+```
+
+## Mode: Enforce vs Monitor
+
+<ParamField path="spec.mode" type="string" required>
+  Controls whether policy violations are enforced or just logged.
+
+  - `enforce` - Block violations, return JSON-RPC error (default)
+  - `monitor` - Log violations but allow through (dry-run)
+</ParamField>
+
+**Use case for monitor mode**: Test new policies in production before enforcement.
+
+```yaml
+spec:
+  mode: monitor  # Test first, enforce later
+```
+
+## Allowed Tools
+
+<ParamField path="spec.allowed_tools" type="array" required>
+  Allowlist of tool names that the agent can invoke. Tool names must exactly match what the MCP server reports.
+</ParamField>
+
+Example:
+
+```yaml
+spec:
+  allowed_tools:
+    - read_file
+    - list_directory
+    - git_status
+    - github_get_repo
+    - github_list_pulls
+```
+
+<Warning>
+  If a tool is not in `allowed_tools` AND not in `tool_rules` with `action: allow`, it will be blocked.
+</Warning>
+
+## Tool Rules
+
+Fine-grained control over individual tools.
+
+<ParamField path="spec.tool_rules" type="array">
+  Array of rules defining per-tool behavior and argument validation.
+</ParamField>
+
+### Rule Structure
+
+```yaml
+spec:
+  tool_rules:
+    - tool: string          # Tool name (required)
+      action: string        # allow | block | ask (default: allow)
+      allow_args: object    # Argument validation patterns
+```
+
+### Actions
+
+<Tabs>
+  <Tab title="allow">
+    Permit the tool call (subject to `allow_args` validation):
+
+    ```yaml
+    tool_rules:
+      - tool: github_get_repo
+        action: allow
+        allow_args:
+          owner: "^mycompany$"
+          repo: ".*"
+    ```
+
+    Only allows accessing repos under `mycompany` organization.
+  </Tab>
+
+  <Tab title="block">
+    Deny unconditionally:
+
+    ```yaml
+    tool_rules:
+      - tool: github_delete_repo
+        action: block
+      
+      - tool: exec_command
+        action: block
+    ```
+
+    These tools will never be allowed, even if in `allowed_tools`.
+  </Tab>
+
+  <Tab title="ask">
+    Require user approval via native OS dialog:
+
+    ```yaml
+    tool_rules:
+      - tool: write_file
+        action: ask
+      
+      - tool: deploy_production
+        action: ask
+    ```
+
+    When triggered:
+    1. Native OS dialog appears: "Allow tool 'write_file'?"
+    2. User clicks "Allow" or "Deny"
+    3. If no response in 60 seconds: auto-deny
+  </Tab>
+</Tabs>
+
+## Argument Validation
+
+Validate tool arguments using regex patterns.
+
+<ParamField path="spec.tool_rules[].allow_args" type="object">
+  Map of argument names to regex patterns. All patterns must match for the tool call to be allowed.
+</ParamField>
+
+### Example: Path Restrictions
+
+```yaml
+tool_rules:
+  - tool: read_file
+    action: allow
+    allow_args:
+      path: "^/home/user/safe-dir/.*$"  # Only allow reading from safe directory
+```
+
+### Example: Repository Scoping
+
+```yaml
+tool_rules:
+  - tool: github_create_pr
+    action: allow
+    allow_args:
+      owner: "^(mycompany|mycompany-labs)$"  # Only specific orgs
+      repo: "^[a-z0-9-]+$"                   # Alphanumeric repo names only
+      base: "^main$"                         # PRs only to main branch
+```
+
+### Regex Best Practices
+
+<Tip>
+  Use anchors (`^` and `$`) to prevent partial matches:
+  
+  - Bad: `"mycompany"` - matches `"evil-mycompany"` 
+  - Good: `"^mycompany$"` - exact match only
+</Tip>
+
+<Warning>
+  Avoid catastrophic backtracking:
+  
+  - Bad: `"(a+)+b"` - exponential time
+  - Good: `"^[a-z]+$"` - linear time (RE2)
+</Warning>
+
+## Real-World Examples
+
+### Example 1: Read-Only File Agent
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: read-only-agent
+spec:
+  mode: enforce
+  allowed_tools:
+    - read_file
+    - list_directory
+    - git_status
+  tool_rules:
+    - tool: write_file
+      action: block
+    - tool: exec_command
+      action: block
+```
+
+### Example 2: GitHub PR Review Agent
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: github-pr-agent
+  version: "1.0.0"
+spec:
+  mode: enforce
+  allowed_tools:
+    - github_get_repo
+    - github_list_pulls
+    - github_get_pull
+    - github_create_comment
+  tool_rules:
+    - tool: github_get_repo
+      allow_args:
+        owner: "^mycompany$"
+    - tool: github_create_comment
+      action: ask  # Human reviews comments before posting
+      allow_args:
+        owner: "^mycompany$"
+```
+
+### Example 3: Database Admin Agent
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: db-admin-agent
+spec:
+  mode: enforce
+  allowed_tools:
+    - postgres_query
+  tool_rules:
+    - tool: postgres_query
+      action: allow
+      allow_args:
+        query: "^SELECT .*$"  # Only SELECT queries
+    - tool: postgres_query
+      action: ask
+      allow_args:
+        query: "^(UPDATE|INSERT|DELETE) .*$"  # Human approval for writes
+  dlp:
+    patterns:
+      - name: "Credit Card"
+        regex: "\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b"
+      - name: "SSN"
+        regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+```
+
+## Policy Versioning
+
+<Steps>
+  <Step title="Use semantic versioning">
+    Version your policies with `metadata.version`:
+
+    ```yaml
+    metadata:
+      version: "2.1.0"
+    ```
+  </Step>
+
+  <Step title="Store in version control">
+    Commit policies to Git for change tracking:
+
+    ```bash
+    git add policies/agent.yaml
+    git commit -m "feat: add github_create_pr to allowed_tools"
+    ```
+  </Step>
+
+  <Step title="Review changes">
+    Require peer review for policy changes, like code reviews.
+  </Step>
+
+  <Step title="Test before deploying">
+    Use `mode: monitor` to test changes:
+
+    ```yaml
+    spec:
+      mode: monitor  # Test for 1 week, then switch to enforce
+    ```
+  </Step>
+</Steps>
+
+## Validation
+
+### Before Deployment
+
+Validate your policy file:
+
+```bash
+aip --validate-policy ./agent.yaml
+```
+
+### Against JSON Schema
+
+Use the formal JSON schema:
+
+```bash
+# Using ajv-cli
+npm install -g ajv-cli
+ajv validate -s spec/schema/agent-policy-v1alpha2.schema.json -d agent.yaml
+```
+
+## Common Pitfalls
+
+<Warning>
+  **Overly permissive regexes**
+  
+  Bad: `".*"` - allows anything
+  Good: `"^[a-zA-Z0-9_-]+$"` - specific character class
+</Warning>
+
+<Warning>
+  **Forgetting to anchor regexes**
+  
+  Bad: `"safe-dir"` - matches `/unsafe-dir/file`
+  Good: `"^/safe-dir/.*$"` - exact path matching
+</Warning>
+
+<Warning>
+  **Not testing monitor mode first**
+  
+  Always test with `mode: monitor` before enforcing.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="DLP Configuration" icon="shield-check" href="/guides/dlp-configuration">
+    Add data loss prevention to your policies
+  </Card>
+  <Card title="Human-in-the-Loop" icon="hand" href="/guides/human-in-the-loop">
+    Configure approval workflows
+  </Card>
+  <Card title="Policy Schema" icon="code" href="/reference/policy-schema">
+    Complete field reference
+  </Card>
+  <Card title="Audit Logging" icon="clipboard-list" href="/guides/audit-logging">
+    Track all policy decisions
+  </Card>
+</CardGroup>

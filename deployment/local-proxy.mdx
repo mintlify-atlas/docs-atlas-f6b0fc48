@@ -1,0 +1,505 @@
+---
+title: "Running AIP Locally"
+description: "Deploy the AIP proxy on your local machine to secure MCP servers running in Cursor, Claude Desktop, or any MCP client"
+---
+
+The AIP proxy runs as a transparent security layer between your AI client (Cursor IDE, Claude Desktop, VS Code) and MCP tool servers. This guide walks you through local deployment — the fastest way to add zero-trust authorization to your agents.
+
+## Overview
+
+In local proxy mode, AIP:
+- Intercepts every `tools/call` request from your AI client
+- Evaluates the request against your YAML policy
+- Blocks unauthorized tools, validates arguments, scans for data leaks
+- Forwards approved requests to the real MCP server
+- Logs all decisions to an immutable audit trail
+
+This is the **"Little Snitch for AI Agents"** — giving you visibility and control over what your agents can actually do.
+
+## Quick Start
+
+<Steps>
+  <Step title="Install the AIP proxy">
+    Download the latest release for your platform:
+
+    ```bash
+    # macOS (Homebrew)
+    brew install aip-proxy
+
+    # Linux
+    curl -L https://github.com/openagentidentityprotocol/aip-go/releases/latest/download/aip-linux-amd64 -o aip
+    chmod +x aip
+    sudo mv aip /usr/local/bin/
+
+    # From source (requires Go 1.21+)
+    git clone https://github.com/openagentidentityprotocol/aip-go.git
+    cd aip-go && go build -o aip ./cmd/aip
+    ```
+
+    Verify installation:
+    ```bash
+    aip --version
+    ```
+  </Step>
+
+  <Step title="Create a policy file">
+    Define what tools your agent is allowed to use. Create `agent.yaml`:
+
+    ```yaml agent.yaml
+    apiVersion: aip.io/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: secure-agent
+      version: "1.0.0"
+    spec:
+      mode: enforce
+      allowed_tools:
+        - read_file
+        - list_directory
+        - git_status
+      tool_rules:
+        - tool: write_file
+          action: ask        # Human approval required
+        - tool: exec_command
+          action: block      # Never allowed
+      dlp:
+        patterns:
+          - name: "AWS Key"
+            regex: "AKIA[A-Z0-9]{16}"
+          - name: "GitHub Token"
+            regex: "ghp_[a-zA-Z0-9]{36}"
+    ```
+
+    <Tip>
+      **Start restrictive**: Only allow the minimum tools needed. You can expand the policy later based on audit logs.
+    </Tip>
+  </Step>
+
+  <Step title="Start the proxy wrapping your MCP server">
+    Wrap any existing MCP server command:
+
+    ```bash
+    # Wrap a Python MCP server
+    aip --target "python mcp_server.py" --policy ./agent.yaml
+
+    # Wrap an NPM-based MCP server
+    aip --target "npx @mcp/server-docker" --policy ./agent.yaml
+
+    # Wrap with verbose logging
+    aip --target "python mcp_server.py" --policy ./agent.yaml --verbose
+    ```
+
+    The proxy starts listening on stdio, ready to receive MCP requests.
+  </Step>
+
+  <Step title="Configure your AI client">
+    Point your AI client to the AIP proxy instead of the original MCP server.
+
+    See [Client Configuration](#client-configuration) below for Cursor IDE and Claude Desktop examples.
+  </Step>
+</Steps>
+
+<Note>
+  The proxy automatically protects the policy file itself — agents cannot read or modify `agent.yaml`.
+</Note>
+
+## Client Configuration
+
+### Cursor IDE
+
+Generate a Cursor configuration automatically:
+
+```bash
+aip --generate-cursor-config --policy ./agent.yaml --target "npx @mcp/server"
+```
+
+This outputs a configuration block to add to Cursor's settings:
+
+<CodeGroup>
+```json Cursor Settings (macOS)
+{
+  "mcp": {
+    "servers": {
+      "aip-protected-server": {
+        "command": "/usr/local/bin/aip",
+        "args": [
+          "--target", "npx @mcp/server",
+          "--policy", "/path/to/agent.yaml"
+        ]
+      }
+    }
+  }
+}
+```
+
+```json Cursor Settings (Linux)
+{
+  "mcp": {
+    "servers": {
+      "aip-protected-server": {
+        "command": "/usr/local/bin/aip",
+        "args": [
+          "--target", "python /home/user/mcp_server.py",
+          "--policy", "/home/user/policies/agent.yaml"
+        ]
+      }
+    }
+  }
+}
+```
+
+```json Cursor Settings (Windows)
+{
+  "mcp": {
+    "servers": {
+      "aip-protected-server": {
+        "command": "C:\\Program Files\\aip\\aip.exe",
+        "args": [
+          "--target", "python C:\\mcp_server.py",
+          "--policy", "C:\\policies\\agent.yaml"
+        ]
+      }
+    }
+  }
+}
+```
+</CodeGroup>
+
+### Claude Desktop
+
+Edit Claude Desktop's MCP configuration file:
+
+<CodeGroup>
+```json macOS (~/.config/claude/config.json)
+{
+  "mcpServers": {
+    "docker-tools": {
+      "command": "/usr/local/bin/aip",
+      "args": [
+        "--target", "npx @mcp/server-docker",
+        "--policy", "/Users/yourname/.config/claude/policies/docker.yaml"
+      ]
+    }
+  }
+}
+```
+
+```json Linux (~/.config/claude/config.json)
+{
+  "mcpServers": {
+    "postgres-tools": {
+      "command": "/usr/local/bin/aip",
+      "args": [
+        "--target", "python /opt/mcp/postgres_server.py",
+        "--policy", "/home/user/.config/claude/policies/postgres.yaml"
+      ]
+    }
+  }
+}
+```
+
+```json Windows (%APPDATA%\Claude\config.json)
+{
+  "mcpServers": {
+    "github-tools": {
+      "command": "C:\\Program Files\\aip\\aip.exe",
+      "args": [
+        "--target", "node C:\\mcp\\github_server.js",
+        "--policy", "C:\\Users\\YourName\\.config\\claude\\policies\\github.yaml"
+      ]
+    }
+  }
+}
+```
+</CodeGroup>
+
+Restart Claude Desktop to load the new configuration.
+
+## Wrapping Existing MCP Servers
+
+The `aip wrap` command provides shortcuts for common MCP servers:
+
+```bash
+# Wrap Docker MCP with a read-only policy
+aip wrap docker --policy ./policies/read-only.yaml
+
+# Wrap GitHub MCP with custom policy
+aip wrap github --policy ./policies/github-agent.yaml
+
+# Wrap PostgreSQL MCP with query validation
+aip wrap postgres --policy ./policies/db-read-only.yaml
+```
+
+Under the hood, these commands:
+1. Detect the MCP server's install location
+2. Start the AIP proxy with the appropriate `--target` command
+3. Apply your policy file
+4. Output the configuration to paste into your AI client
+
+<Tip>
+  Use `aip wrap --list` to see all supported MCP servers.
+</Tip>
+
+## Policy Examples for Common Use Cases
+
+### Read-Only Agent
+
+Block all write operations:
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: read-only
+spec:
+  mode: enforce
+  allowed_tools:
+    - read_file
+    - list_directory
+    - search_files
+    - git_status
+    - git_log
+  tool_rules:
+    - tool: write_file
+      action: block
+    - tool: delete_file
+      action: block
+    - tool: exec_command
+      action: block
+```
+
+### GitHub Agent with Human-in-the-Loop
+
+Read GitHub data freely, but require approval for destructive actions:
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: github-agent
+spec:
+  mode: enforce
+  allowed_tools:
+    - github_get_repo
+    - github_list_pulls
+    - github_get_issue
+  tool_rules:
+    - tool: github_create_pull
+      action: ask  # Native OS approval dialog
+    - tool: github_merge_pull
+      action: ask
+    - tool: github_close_issue
+      action: ask
+    - tool: github_delete_repo
+      action: block  # Never allowed
+  dlp:
+    patterns:
+      - name: "GitHub Token"
+        regex: "ghp_[a-zA-Z0-9]{36}"
+```
+
+### Database Agent with Query Validation
+
+Only allow SELECT queries, block all mutations:
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: db-read-only
+spec:
+  mode: enforce
+  allowed_tools:
+    - postgres_query
+    - postgres_list_tables
+  tool_rules:
+    - tool: postgres_query
+      allow_args:
+        query: "^SELECT\\s+.*"  # Only SELECT statements
+  dlp:
+    patterns:
+      - name: "Credit Card"
+        regex: "\\b(?:\\d{4}[- ]?){3}\\d{4}\\b"
+      - name: "SSN"
+        regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+```
+
+## Monitoring and Debugging
+
+### Audit Logs
+
+All authorization decisions are logged to `aip-audit.jsonl` in JSON Lines format:
+
+```bash
+# View all blocked requests
+cat aip-audit.jsonl | jq 'select(.decision == "BLOCK")'
+
+# View policy violations in monitor mode
+cat aip-audit.jsonl | jq 'select(.violation == true)'
+
+# View DLP redactions
+cat aip-audit.jsonl | jq 'select(.event == "DLP_TRIGGERED")'
+```
+
+Example audit entry:
+```json
+{
+  "timestamp": "2026-03-03T10:30:45.123Z",
+  "direction": "upstream",
+  "method": "tools/call",
+  "tool": "delete_file",
+  "args": {"path": "/etc/passwd"},
+  "decision": "BLOCK",
+  "policy_mode": "enforce",
+  "violation": true,
+  "error_code": -32001
+}
+```
+
+### Verbose Mode
+
+Run with `--verbose` to see policy evaluation in real-time:
+
+```bash
+aip --target "python mcp_server.py" --policy ./agent.yaml --verbose
+```
+
+Output:
+```
+[INFO] Loaded policy: secure-agent (v1.0.0)
+[INFO] Protected paths: [agent.yaml]
+[DEBUG] Request: tools/call -> read_file
+[DEBUG] Evaluating allowed_tools: [read_file] ✓
+[INFO] Decision: ALLOW
+[DEBUG] Request: tools/call -> exec_command
+[DEBUG] Tool not in allowed_tools
+[DEBUG] Tool rule: action=block
+[WARN] Decision: BLOCK (error: -32001)
+```
+
+### Monitor Mode
+
+Test policies without blocking requests:
+
+```yaml
+spec:
+  mode: monitor  # Log violations but allow through
+```
+
+This lets you:
+1. Deploy a new policy in production
+2. Collect audit logs for a few days
+3. Identify unexpected tool usage
+4. Refine the policy before enforcement
+
+<Warning>
+  Monitor mode logs violations but **does not block them**. Do not use in production for security-critical agents.
+</Warning>
+
+## Human-in-the-Loop Approvals
+
+When a tool is marked with `action: ask`, AIP displays a native OS dialog:
+
+**macOS**: Uses AppleScript to show a system dialog
+
+**Linux**: Uses `zenity` or `kdialog` depending on desktop environment
+
+**Windows**: Uses PowerShell native UI (planned)
+
+The dialog shows:
+- Agent name (from policy metadata)
+- Tool being requested
+- Tool arguments (truncated)
+- "Allow" and "Deny" buttons
+
+If the user doesn't respond within 60 seconds, the request is auto-denied.
+
+<Note>
+  Human-in-the-loop requires an interactive terminal. It will not work in headless environments (use Kubernetes sidecar mode instead).
+</Note>
+
+## Performance Considerations
+
+### Latency
+
+The AIP proxy adds minimal overhead:
+- **Policy evaluation**: Less than 1ms (in-memory YAML parsing)
+- **Regex validation**: Less than 1ms per argument (RE2 linear-time guarantees)
+- **DLP scanning**: Less than 5ms for typical responses (under 10KB)
+
+### Resource Usage
+
+Typical local proxy:
+- **Memory**: 10-20 MB
+- **CPU**: Less than 1% idle, less than 5% during requests
+- **Disk**: Audit logs grow at approximately 1KB per request
+
+### Log Rotation
+
+Rotate audit logs to prevent unbounded growth:
+
+```bash
+# Rotate logs daily (Linux/macOS)
+logrotate -d /etc/logrotate.d/aip-audit
+
+# Archive old logs
+mv aip-audit.jsonl aip-audit-$(date +%Y%m%d).jsonl
+```
+
+## Troubleshooting
+
+### Proxy won't start
+
+**Error**: `failed to load policy: invalid apiVersion`
+
+**Fix**: Ensure your policy uses `apiVersion: aip.io/v1alpha1`
+
+---
+
+**Error**: `target command not found: python`
+
+**Fix**: Use the full path to the target command:
+```bash
+aip --target "/usr/bin/python3 mcp_server.py" --policy ./agent.yaml
+```
+
+### All requests are blocked
+
+**Symptom**: Agent reports "Permission Denied" for every tool
+
+**Diagnosis**: Check if `allowed_tools` is empty or missing:
+
+```bash
+aip --policy ./agent.yaml --validate
+```
+
+**Fix**: Add tools to the allowlist or use `tool_rules` with `action: allow`
+
+### DLP not redacting secrets
+
+**Symptom**: API keys visible in agent responses
+
+**Diagnosis**: Check if the DLP pattern matches:
+
+```bash
+echo "AKIAIOSFODNN7EXAMPLE" | grep -P "AKIA[A-Z0-9]{16}"
+```
+
+**Fix**: Verify regex patterns using RE2 syntax (not PCRE)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Policy Reference" icon="file-code" href="/reference/policy-yaml">
+    Complete YAML schema and validation rules
+  </Card>
+  <Card title="Kubernetes Deployment" icon="dharmachakra" href="/deployment/kubernetes-sidecar">
+    Deploy AIP as a sidecar in production
+  </Card>
+  <Card title="Production Best Practices" icon="shield-check" href="/deployment/production-best-practices">
+    Security hardening and monitoring
+  </Card>
+  <Card title="FAQ" icon="circle-question" href="/community/faq">
+    Common questions and troubleshooting
+  </Card>
+</CardGroup>

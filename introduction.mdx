@@ -1,0 +1,167 @@
+---
+title: "Introduction to AIP"
+description: "The Zero-Trust Identity Layer for AI Agents and the Model Context Protocol"
+---
+
+AIP (Agent Identity Protocol) is an open-source standard for **authentication, attestation, authorization, and governance of AI agents**. It's the IAM standard for AI.
+
+<Note>
+  AIP is being proposed to the [IETF](https://www.ietf.org) as a universal standard for identity in the **Internet of Agents (IoA)** — so that anyone, anywhere, can build secure agents with full visibility and confidence.
+</Note>
+
+## The God Mode Problem
+
+Today, agents are granted full permissions to API keys, secrets, and system resources, running *as* the user with no distinction between human and non-human actions. As the line between what a human and an autonomous agent does becomes increasingly blurred, this creates serious risks — not just at a security level, but at a **legal, societal, and economic level**.
+
+### Agents Have No Identity Layer
+
+There is no universal way to distinguish an AI agent from a human actor. When you connect Claude, Cursor, or any MCP-compatible agent to your systems, it receives **god mode** — full access to every tool the server exposes, with the same credentials as the user.
+
+**Model safety isn't enough.** Attacks like Indirect Prompt Injection — demonstrated by the [GeminiJack vulnerability](https://embrace-the-red.com/blog/gemini-jack/) — have proven that adversarial instructions embedded in documents, emails, or data can hijack agent behavior. The model *believes* it's following your intent while executing an attacker's commands.
+
+<Warning>
+Your agent is one poisoned PDF away from `rm -rf /`.
+</Warning>
+
+Beyond security, agents operating without identity creates systemic gaps:
+
+- **No audit trail** — actions taken by agents are indistinguishable from human actions in logs
+- **No revocation** — once an agent has credentials, there is no standard way to revoke them
+- **No authorization granularity** — access is all-or-nothing at the API key level
+- **Compliance blind spots** — SOC 2, GDPR, HIPAA, and SOX requirements are unmet for agentic actions
+
+> ***"Authentication is for Users. AIP is for Agents."***
+
+## How AIP Works
+
+AIP is built on two layers that work together. **Layer 1 establishes who the agent is.** **Layer 2 decides what it's allowed to do.** The Agent Authentication Token (AAT) is the bridge. It's issued by Layer 1, enforced by Layer 2.
+
+The current Go implementation of AIP introduces **policy-based authorization** at the tool-call layer—the missing security primitive between your agents and your infrastructure.
+
+### Two-Layer Architecture
+
+```
+         LAYER 1 — IDENTITY                    LAYER 2 — ENFORCEMENT
+         (Who is this agent?)                  (What can it do?)
+
+┌─────────────────┐                       ┌─────────────────┐
+│  Root Registry  │  (AIP Authority)      │   AI Client     │
+│  Signs Agent    │                       │ Cursor / Claude │
+│  Certificates   │                       └────────┬────────┘
+└────────┬────────┘                                │ tool call + AAT
+         │ Issues Attestation                      ▼
+         ▼                                ┌─────────────────────────┐
+┌─────────────────┐                       │       AIP Proxy         │
+│ Agent Identity  │                       │                         │
+│  (Public Key)   │                       │ 1. Verify AAT signature │◀── AIP Registry
+└────────┬────────┘                       │ 2. Check token claims   │    (revocation)
+         │ Signs Token Requests           │ 3. Evaluate policy      │
+         ▼                                │ 4. DLP scan             │
+┌─────────────────┐                       │ 5. Audit log            │
+│  Token Issuer   │                       └────────┬────────────────┘
+│  Validates ID   │      AAT                       │ ✅ ALLOW / 🔴 DENY
+│  Issues AAT     │ ─────────────────────────────▶ │
+└─────────────────┘                                ▼
+                                          ┌─────────────────┐
+                                          │   Real Tool     │
+                                          │ Docker/Postgres │
+                                          │ GitHub / etc.   │
+                                          └─────────────────┘
+```
+
+**The AAT is what connects the two layers.** It carries signed claims about the agent — who issued its identity, which user it's acting on behalf of, what capabilities it declared, and when it was issued. The proxy in Layer 2 doesn't just check a static YAML allowlist — it verifies the cryptographic signature on the AAT, checks those claims against policy, and only then permits the tool call.
+
+This means:
+- A **hijacked agent** fails at Layer 2 — its AAT claims don't match the attempted action
+- A **revoked agent** fails at Layer 2 — the proxy checks the registry revocation list on every call
+- A **legitimate agent** passes through both layers with a full audit trail tied to its identity
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Per-Agent Identity" icon="fingerprint">
+    Cryptographic identities tied to each agent, not just user-level credentials
+  </Card>
+  <Card title="Policy-Based Authorization" icon="shield-check">
+    Fine-grained control at the tool-call and argument level with YAML policies
+  </Card>
+  <Card title="Defense Against Prompt Injection" icon="shield-halved">
+    Blocks unauthorized actions even when the model is hijacked
+  </Card>
+  <Card title="Immutable Audit Trail" icon="file-lines">
+    JSONL logs of every authorization decision, tied to agent identity
+  </Card>
+  <Card title="Human-in-the-Loop" icon="hand">
+    Native OS approval dialogs for sensitive operations
+  </Card>
+  <Card title="Data Loss Prevention" icon="lock">
+    DLP scanning with regex patterns for secrets, PII, and sensitive data
+  </Card>
+  <Card title="Zero Trust" icon="ban">
+    Default deny — if not explicitly allowed, it's blocked
+  </Card>
+  <Card title="Compliance Ready" icon="check-double">
+    SOC 2, GDPR, HIPAA, and SOX audit requirements built-in
+  </Card>
+</CardGroup>
+
+## Design Goals
+
+- **Language Agnostic** — supports agents written in Python, JavaScript, Go, Java, Rust, and more
+- **Zero Trust** — no implicit trust between agents or based on network location
+- **Minimal Overhead** — fast token verification without centralized bottlenecks
+- **Compliance Ready** — generates audit trails that satisfy SOC 2, GDPR, HIPAA, and SOX
+- **Developer Friendly** — simple SDK integration that works locally without infrastructure
+
+## Quick Links
+
+<CardGroup cols={2}>
+  <Card title="Why AIP?" icon="question" href="/why-aip">
+    Understand the threat model and security challenges AIP solves
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started with AIP in under 5 minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/layer-1-identity">
+    Learn about AATs, policies, and the two-layer architecture
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Deep dive into the Layer 1 and Layer 2 design
+  </Card>
+</CardGroup>
+
+## What Just Happened?
+
+When an agent attempts a dangerous operation, AIP blocks it **before** the tool ever receives the request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32001,
+    "message": "Permission Denied: Tool 'delete_database' is not allowed by policy"
+  }
+}
+```
+
+<Steps>
+  <Step title="Agent Attempts Action">
+    Agent (possibly hijacked by prompt injection) tries to call `delete_database`
+  </Step>
+  <Step title="Policy Engine Checks">
+    AIP policy engine checks `allowed_tools` list
+  </Step>
+  <Step title="Tool Not Found">
+    Tool not found → Request blocked before reaching your infrastructure
+  </Step>
+  <Step title="Audit Trail">
+    Attempt logged to audit trail for forensic analysis
+  </Step>
+</Steps>
+
+**Your database never received the request.** This is zero-trust authorization in action.
+
+<Tip>
+Ready to secure your agents? Start with the [Quickstart](/quickstart) to see AIP in action in under 5 minutes.
+</Tip>

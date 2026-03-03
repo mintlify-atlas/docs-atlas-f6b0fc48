@@ -1,0 +1,440 @@
+---
+title: "Conformance Testing"
+description: "Validate your AIP implementation against the official test suite to ensure protocol compliance"
+---
+
+## Overview
+
+The **AIP Conformance Test Suite** provides test vectors for validating implementations of the Agent Identity Protocol. Any implementation claiming AIP conformance must pass all tests at their claimed conformance level.
+
+<Note>
+  Conformance tests ensure interoperability across different AIP implementations and guarantee adherence to the specification.
+</Note>
+
+## Conformance Levels
+
+AIP defines five conformance levels, each building on the previous:
+
+| Level | Description | Test Files | API Version |
+|-------|-------------|------------|-------------|
+| **Basic** | Minimum viable implementation | `basic/*.yaml` | v1alpha1+ |
+| **Full** | Complete feature support | Basic + `full/*.yaml` | v1alpha1+ |
+| **Extended** | Human-in-the-loop support | Full + `extended/*.yaml` | v1alpha1+ |
+| **Identity** | Token lifecycle management | Extended + `identity/*.yaml` | v1alpha2+ |
+| **Server** | HTTP validation endpoints | Identity + `server/*.yaml` | v1alpha2+ |
+
+### Level Details
+
+<CardGroup cols={2}>
+  <Card title="Basic" icon="1">
+    Tool allowlists, blocking, error codes, and default deny behavior
+  </Card>
+  <Card title="Full" icon="2">
+    Argument validation, DLP scanning, rate limiting, and Unicode normalization
+  </Card>
+  <Card title="Extended" icon="3">
+    Human approval dialogs (ask action) and timeout handling
+  </Card>
+  <Card title="Identity" icon="4">
+    Agent Authentication Tokens (AAT), session binding, and token rotation
+  </Card>
+  <Card title="Server" icon="5">
+    HTTP validation endpoints, TLS, and distributed policy enforcement
+  </Card>
+</CardGroup>
+
+## Test Categories
+
+### Basic Conformance
+
+<Steps>
+  <Step title="basic/authorization.yaml">
+    **What it tests:**
+    - Tool allowlist enforcement
+    - Tool blocking via `tool_rules`
+    - Default deny behavior (fail-closed)
+    - Monitor mode vs. enforce mode
+    
+    **Key test cases:**
+    - Tools in `allowed_tools` are allowed
+    - Tools NOT in `allowed_tools` are blocked
+    - Blocked tools remain blocked even if in allowlist
+    - Monitor mode logs violations but allows requests
+  </Step>
+
+  <Step title="basic/methods.yaml">
+    **What it tests:**
+    - Method-level authorization
+    - Method allowlist and denylist
+    - Default allowed methods
+  </Step>
+
+  <Step title="basic/errors.yaml">
+    **What it tests:**
+    - Correct error codes (`-32001` for permission denied)
+    - Error message format
+    - Error response structure
+  </Step>
+</Steps>
+
+### Full Conformance
+
+<Steps>
+  <Step title="full/arguments.yaml">
+    **What it tests:**
+    - Regex validation on tool arguments
+    - Strict args mode (unexpected arguments)
+    - Type coercion and validation
+    
+    **Example test:**
+    ```yaml
+    tool_rules:
+      - tool: write_file
+        args:
+          path:
+            pattern: "^/tmp/.*"
+    # Only allows writing to /tmp/
+    ```
+  </Step>
+
+  <Step title="full/normalization.yaml">
+    **What it tests:**
+    - Unicode NFKC normalization for security
+    - Case-insensitive matching
+    - Whitespace handling
+    
+    **Why it matters:** Prevents bypass attacks using Unicode variants
+  </Step>
+
+  <Step title="full/dlp.yaml">
+    **What it tests:**
+    - Pattern matching for sensitive data
+    - Redaction format (e.g., `AKIA****` for AWS keys)
+    - DLP in both requests and responses
+    
+    **Example patterns:**
+    - AWS keys: `AKIA[A-Z0-9]{16}`
+    - GitHub tokens: `ghp_[a-zA-Z0-9]{36}`
+  </Step>
+</Steps>
+
+### Extended Conformance
+
+<Steps>
+  <Step title="extended/ask.yaml">
+    **What it tests:**
+    - Human-in-the-loop behavior (action: ask)
+    - Approval dialog triggering
+    - Timeout handling for user responses
+    
+    **Decision flow:**
+    1. Agent calls sensitive tool
+    2. Proxy returns `ASK` decision
+    3. User approves or denies via OS dialog
+    4. Request proceeds or is blocked
+  </Step>
+</Steps>
+
+### Identity Conformance (v1alpha2)
+
+<Steps>
+  <Step title="identity/tokens.yaml">
+    **What it tests:**
+    - Agent Authentication Token (AAT) generation
+    - Token structure validation (JWT format)
+    - Token expiration and rotation
+    - Cryptographic signature verification
+  </Step>
+
+  <Step title="identity/validation.yaml">
+    **What it tests:**
+    - Token validation success/failure
+    - Replay attack detection
+    - Policy change detection via hash
+    - Revocation list checking
+  </Step>
+</Steps>
+
+### Server Conformance (v1alpha2)
+
+<Steps>
+  <Step title="server/endpoints.yaml">
+    **What it tests:**
+    - `/validate` HTTP endpoint request/response
+    - `/health` endpoint
+    - `/metrics` endpoint format (Prometheus)
+  </Step>
+
+  <Step title="server/authentication.yaml">
+    **What it tests:**
+    - Bearer token authentication
+    - Token requirement enforcement
+    - HTTP 401/403 error responses
+  </Step>
+</Steps>
+
+## Running Conformance Tests
+
+<Steps>
+  <Step title="Install the conformance validator">
+    ```bash
+    # Install the official validator
+    go install github.com/ArangoGutierrez/agent-identity-protocol/tools/aip-conformance@latest
+    ```
+  </Step>
+
+  <Step title="Run tests against your implementation">
+    ```bash
+    # Test at Basic level
+    aip-conformance --impl "your-binary" --level basic
+
+    # Test at Full level
+    aip-conformance --impl "your-binary" --level full
+
+    # Test all levels
+    aip-conformance --impl "your-binary" --level server
+    ```
+  </Step>
+
+  <Step title="View results">
+    The validator outputs:
+    - ✅ Passed tests
+    - ❌ Failed tests with details
+    - Summary of conformance level achieved
+  </Step>
+</Steps>
+
+## Test Vector Format
+
+Each test file contains YAML test cases:
+
+```yaml
+name: "Basic Authorization"
+description: "Tests for tool-level authorization decisions"
+spec_version: "aip.io/v1alpha1"
+
+tests:
+  - id: "auth-001"
+    description: "Tool in allowed_tools list should be allowed"
+    policy: |
+      apiVersion: aip.io/v1alpha1
+      kind: AgentPolicy
+      metadata:
+        name: test-policy
+      spec:
+        allowed_tools:
+          - read_file
+    input:
+      method: "tools/call"
+      tool: "read_file"
+      args:
+        path: "/tmp/test.txt"
+    expected:
+      decision: "ALLOW"
+      error_code: null
+      violation: false
+```
+
+### Matching Rules
+
+<CardGroup cols={2}>
+  <Card title="decision" icon="gavel">
+    Exact string match: `ALLOW`, `BLOCK`, `ASK`, `RATE_LIMITED`, `PROTECTED_PATH`
+  </Card>
+  <Card title="error_code" icon="circle-exclamation">
+    Exact match: `-32001` (permission denied), `-32002` (rate limited), or `null`
+  </Card>
+  <Card title="violation" icon="shield-halved">
+    Boolean: `true` if policy violation detected, `false` otherwise
+  </Card>
+  <Card title="DLP tests" icon="eye-slash">
+    Verify redaction occurred in response (e.g., `AKIA****`)
+  </Card>
+</CardGroup>
+
+## Example: Running a Basic Test
+
+### Test Case
+
+```yaml
+- id: "auth-002"
+  description: "Tool NOT in allowed_tools list should be blocked"
+  policy: |
+    apiVersion: aip.io/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: test-policy
+    spec:
+      allowed_tools:
+        - read_file
+  input:
+    method: "tools/call"
+    tool: "delete_file"
+    args:
+      path: "/tmp/test.txt"
+  expected:
+    decision: "BLOCK"
+    error_code: -32001
+    violation: true
+```
+
+### Test Execution
+
+<Steps>
+  <Step title="Load the policy">
+    The validator loads the inline policy YAML into your implementation
+  </Step>
+  <Step title="Submit the input request">
+    Sends `tools/call` with tool `delete_file`
+  </Step>
+  <Step title="Verify the output">
+    Checks that your implementation returns:
+    - Decision: `BLOCK`
+    - Error code: `-32001`
+    - Violation flag: `true`
+  </Step>
+</Steps>
+
+## Current Implementation Conformance
+
+| Implementation | Language | Conformance Level | Maintainer |
+|----------------|----------|-------------------|------------|
+| [go-proxy](https://github.com/openagentidentityprotocol/aip-go) | Go | **Full + Extended** | @ArangoGutierrez |
+
+<Note>
+  **v1alpha2 Support:** Identity and Server conformance levels are currently in development. The Go proxy targets Full + Extended for v1alpha1.
+</Note>
+
+## Implementation Guidance
+
+### Recommended Implementation Order
+
+<Steps>
+  <Step title="Start with Basic">
+    Implement core authorization:
+    - Tool allowlists (`allowed_tools`)
+    - Tool blocking (`action: block`)
+    - Default deny behavior
+    - Error code `-32001`
+  </Step>
+
+  <Step title="Add Full support">
+    Implement advanced features:
+    - Argument validation (regex patterns)
+    - DLP scanning
+    - Unicode NFKC normalization
+    - Rate limiting
+  </Step>
+
+  <Step title="Add Extended for production">
+    Implement human-in-the-loop:
+    - `action: ask` support
+    - OS approval dialogs (platform-specific)
+    - Timeout handling
+  </Step>
+
+  <Step title="Add Identity (optional)">
+    Implement token management (v1alpha2):
+    - AAT generation and validation
+    - Session binding
+    - Token rotation
+  </Step>
+
+  <Step title="Add Server (optional)">
+    Implement HTTP endpoints for distributed deployments:
+    - `/validate` endpoint
+    - TLS requirement
+    - Bearer token auth
+  </Step>
+</Steps>
+
+## Schema Validation
+
+Validate policy files against the JSON Schema before testing:
+
+```bash
+# Using ajv-cli (v1alpha2)
+npm install -g ajv-cli
+ajv validate -s spec/schema/agent-policy-v1alpha2.schema.json -d your-policy.yaml
+
+# Using Python jsonschema (v1alpha2)
+pip install jsonschema pyyaml
+python -c "
+import yaml, jsonschema, json
+schema = json.load(open('spec/schema/agent-policy-v1alpha2.schema.json'))
+policy = yaml.safe_load(open('your-policy.yaml'))
+jsonschema.validate(policy, schema)
+print('Valid!')
+"
+```
+
+## Contributing Tests
+
+When adding new conformance tests:
+
+<CardGroup cols={2}>
+  <Card title="Positive AND Negative" icon="check">
+    Include both success and failure cases
+  </Card>
+  <Card title="Edge Cases" icon="triangle-exclamation">
+    Test empty strings, Unicode, null values
+  </Card>
+  <Card title="Documentation" icon="book">
+    Explain WHY the expected result is correct
+  </Card>
+  <Card title="Deterministic" icon="rotate">
+    Ensure tests produce consistent results
+  </Card>
+</CardGroup>
+
+### Test Contribution Process
+
+<Steps>
+  <Step title="Open an issue">
+    Describe the test scenario you want to add
+  </Step>
+  <Step title="Add test vectors">
+    Write YAML test cases following the format
+  </Step>
+  <Step title="Submit PR">
+    Include test file and update this documentation
+  </Step>
+  <Step title="Verify against reference implementation">
+    Ensure Go proxy passes your new tests
+  </Step>
+</Steps>
+
+## Versioning
+
+Test vectors are versioned alongside the specification:
+
+- **v1alpha1** - Basic, Full, Extended
+- **v1alpha2** - Identity, Server (backward compatible with v1alpha1)
+
+<Note>
+  **Backward Compatibility:** Implementations supporting v1alpha2 MUST also pass all v1alpha1 tests.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Go Implementation" icon="code" href="/reference/go-implementation">
+    Reference implementation and SDK
+  </Card>
+  <Card title="Specification" icon="file-lines" href="/reference/spec-v1alpha2">
+    Read the formal protocol definition
+  </Card>
+  <Card title="Policy Reference" icon="book" href="/reference/policy-yaml">
+    Complete YAML schema guide
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/guides/installation">
+    Build your own AIP implementation
+  </Card>
+</CardGroup>
+
+## Resources
+
+- **Conformance Suite:** [`spec/conformance/`](https://github.com/ArangoGutierrez/agent-identity-protocol/tree/main/spec/conformance)
+- **JSON Schemas:** [`spec/schema/`](https://github.com/ArangoGutierrez/agent-identity-protocol/tree/main/spec/schema)
+- **Reference Implementation:** [Go Proxy](https://github.com/openagentidentityprotocol/aip-go)
+- **Submit Issues:** [GitHub Issues](https://github.com/ArangoGutierrez/agent-identity-protocol/issues)

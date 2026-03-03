@@ -1,0 +1,411 @@
+---
+title: DLP Configuration
+description: Prevent data exfiltration with Data Loss Prevention scanning
+---
+
+Data Loss Prevention (DLP) scanning in AIP detects and blocks sensitive data from leaving through agent responses. This guide shows you how to configure DLP patterns and egress controls.
+
+## Overview
+
+AIP's DLP engine scans tool responses for sensitive patterns like:
+- API keys and secrets
+- Credit card numbers
+- Social Security Numbers
+- Email addresses
+- IP addresses
+- Custom sensitive data patterns
+
+## Configuration
+
+Configure DLP in your policy's `dlp` section:
+
+```yaml
+apiVersion: aip.io/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: dlp-example
+spec:
+  mode: enforce
+  allowed_tools:
+    - read_file
+  dlp:
+    patterns:
+      - name: "AWS Access Key"
+        regex: "AKIA[A-Z0-9]{16}"
+      - name: "Credit Card"
+        regex: "\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b"
+```
+
+## Pattern Structure
+
+<ParamField path="dlp.patterns" type="array">
+  Array of regex patterns to scan for in tool responses.
+</ParamField>
+
+<ParamField path="dlp.patterns[].name" type="string" required>
+  Human-readable name for the pattern. Used in audit logs.
+</ParamField>
+
+<ParamField path="dlp.patterns[].regex" type="string" required>
+  Regular expression to match sensitive data. Must be valid RE2 syntax.
+</ParamField>
+
+## Built-In Pattern Library
+
+### Cloud Provider Secrets
+
+```yaml
+dlp:
+  patterns:
+    # AWS Access Key
+    - name: "AWS Access Key"
+      regex: "AKIA[A-Z0-9]{16}"
+    
+    # AWS Secret Key
+    - name: "AWS Secret Key"
+      regex: "[A-Za-z0-9/+=]{40}"
+    
+    # Google Cloud API Key
+    - name: "GCP API Key"
+      regex: "AIza[0-9A-Za-z\\-_]{35}"
+    
+    # GitHub Token
+    - name: "GitHub Token"
+      regex: "ghp_[0-9a-zA-Z]{36}"
+    
+    # Azure Storage Key
+    - name: "Azure Storage Key"
+      regex: "DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[^;]+"
+```
+
+### Financial Data
+
+```yaml
+dlp:
+  patterns:
+    # Credit Card (Luhn-aware regex)
+    - name: "Credit Card"
+      regex: "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\\b"
+    
+    # SSN
+    - name: "Social Security Number"
+      regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    
+    # IBAN
+    - name: "IBAN"
+      regex: "[A-Z]{2}\\d{2}[A-Z0-9]{4}\\d{7}([A-Z0-9]?){0,16}"
+```
+
+### Personal Identifiable Information (PII)
+
+```yaml
+dlp:
+  patterns:
+    # Email addresses
+    - name: "Email Address"
+      regex: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+    
+    # Phone numbers (US)
+    - name: "Phone Number"
+      regex: "\\b(?:\\+1[-.\\s]?)?\\(?([0-9]{3})\\)?[-.\\s]?([0-9]{3})[-.\\s]?([0-9]{4})\\b"
+    
+    # IP addresses
+    - name: "IP Address"
+      regex: "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b"
+```
+
+## How DLP Scanning Works
+
+<Steps>
+  <Step title="Agent calls a tool">
+    The agent requests data:
+
+    ```json
+    {
+      "method": "tools/call",
+      "params": {
+        "name": "read_file",
+        "arguments": {"path": "/home/user/.env"}
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="AIP forwards the request">
+    After policy checks pass, the request goes to the MCP server.
+  </Step>
+
+  <Step title="MCP server returns response">
+    The server returns the file contents:
+
+    ```json
+    {
+      "result": {
+        "content": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="DLP engine scans the response">
+    AIP scans the response content against all configured patterns.
+
+    **Match found**: `AKIAIOSFODNN7EXAMPLE` matches `AKIA[A-Z0-9]{16}`
+  </Step>
+
+  <Step title="Sensitive data is redacted">
+    The response is modified:
+
+    ```json
+    {
+      "result": {
+        "content": "AWS_ACCESS_KEY_ID=[REDACTED: AWS Access Key]\\nAWS_SECRET_ACCESS_KEY=[REDACTED: AWS Secret Key]"
+      }
+    }
+    ```
+
+    The original match is logged to the audit trail.
+  </Step>
+</Steps>
+
+## v1alpha2: Enhanced DLP
+
+v1alpha2 adds request-side DLP scanning:
+
+```yaml
+apiVersion: aip.io/v1alpha2
+kind: AgentPolicy
+spec:
+  dlp:
+    scan_requests: true   # Scan arguments, not just responses
+    scan_responses: true  # Scan tool outputs (default)
+    patterns:
+      - name: "AWS Key"
+        regex: "AKIA[A-Z0-9]{16}"
+```
+
+**Use case**: Prevent agents from echoing secrets back in parameters.
+
+## Custom Patterns
+
+### Example: Internal URLs
+
+```yaml
+dlp:
+  patterns:
+    - name: "Internal URL"
+      regex: "https?://[a-z0-9-]+\\.internal\\.company\\.com"
+```
+
+### Example: Database Connection Strings
+
+```yaml
+dlp:
+  patterns:
+    - name: "Postgres Connection String"
+      regex: "postgresql://[^@]+@[^/]+/[^\\s]+"
+```
+
+### Example: API Tokens
+
+```yaml
+dlp:
+  patterns:
+    - name: "Bearer Token"
+      regex: "Bearer [A-Za-z0-9\\-._~+/]+=*"
+```
+
+## Performance Considerations
+
+### Regex Complexity
+
+<Warning>
+  Avoid catastrophic backtracking patterns:
+  
+  **Bad**: `"(a+)+b"` - exponential time
+  **Good**: `"^[a-z]+$"` - linear time (RE2)
+</Warning>
+
+AIP uses RE2 for guaranteed linear-time regex evaluation.
+
+### Scanning Overhead
+
+Typical DLP scanning adds:
+- Less than 5ms for responses under 10KB
+- Less than 50ms for responses under 100KB
+- Scales linearly with response size
+
+### Optimizing Performance
+
+```yaml
+# Option 1: Limit patterns to high-risk tools only
+tool_rules:
+  - tool: read_file
+    action: allow
+    dlp:
+      patterns:  # Tool-specific DLP (v1alpha2)
+        - name: "AWS Key"
+          regex: "AKIA[A-Z0-9]{16}"
+
+# Option 2: Use more specific patterns
+dlp:
+  patterns:
+    - name: "AWS Key in env file"
+      regex: "AWS_ACCESS_KEY_ID=AKIA[A-Z0-9]{16}"  # More specific = faster
+```
+
+## Redaction Strategies
+
+### Default: Full Redaction
+
+```
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+                  ^^^^^^^^^^^^^^^^^^^^^^
+                  [REDACTED: AWS Access Key]
+```
+
+### Partial Masking (v1alpha2)
+
+```yaml
+dlp:
+  patterns:
+    - name: "Credit Card"
+      regex: "\\b\\d{4}[- ]?\\d{4}[- ]?\\d{4}[- ]?\\d{4}\\b"
+      redaction: partial  # Show last 4 digits
+```
+
+Output:
+```
+Card: 1234-5678-9012-3456
+      ****-****-****-3456
+```
+
+## Audit Logging
+
+Every DLP match is logged:
+
+```json
+{
+  "timestamp": "2026-03-03T17:00:00Z",
+  "event_type": "dlp_match",
+  "tool": "read_file",
+  "pattern": "AWS Access Key",
+  "match_count": 1,
+  "redacted": true,
+  "arguments": {"path": "/home/user/.env"}
+}
+```
+
+Query DLP violations:
+
+```bash
+cat aip-audit.jsonl | jq 'select(.event_type == "dlp_match")'
+```
+
+## Compliance Use Cases
+
+### SOC 2 Type II
+
+Demonstrate technical controls for data access:
+
+```yaml
+dlp:
+  patterns:
+    - name: "PII - Email"
+      regex: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+    - name: "PII - Phone"
+      regex: "\\b\\d{3}-\\d{3}-\\d{4}\\b"
+```
+
+Audit logs prove data was redacted before leaving the system.
+
+### GDPR Article 32
+
+Technical measures to ensure data security:
+
+```yaml
+dlp:
+  patterns:
+    - name: "Personal Data - EU ID"
+      regex: "[A-Z]{2}\\d{9}"
+```
+
+### HIPAA
+
+Protect Protected Health Information (PHI):
+
+```yaml
+dlp:
+  patterns:
+    - name: "Medical Record Number"
+      regex: "MRN-\\d{8}"
+    - name: "Prescription Number"
+      regex: "Rx#\\d{10}"
+```
+
+## Testing DLP Patterns
+
+### Validate Regex
+
+Test patterns before deploying:
+
+```bash
+# Use grep to test regex
+echo "AKIAIOSFODNN7EXAMPLE" | grep -E "AKIA[A-Z0-9]{16}"
+```
+
+### Monitor Mode Testing
+
+Test DLP without blocking:
+
+```yaml
+spec:
+  mode: monitor  # Log matches but don't redact
+  dlp:
+    patterns:
+      - name: "Test Pattern"
+        regex: "..."
+```
+
+Review logs to validate patterns before enforcing.
+
+## Troubleshooting
+
+<Accordion title="Pattern not matching">
+  Common issues:
+  
+  - **Escaping**: Use double backslashes in YAML: `"\\d"` not `"\d"`
+  - **Anchors**: Patterns are searched, not matched. Don't use `^` or `$` unless needed.
+  - **Case sensitivity**: Patterns are case-sensitive by default.
+  
+  Test with:
+  ```bash
+  echo "test string" | grep -E "your-pattern"
+  ```
+</Accordion>
+
+<Accordion title="Performance degradation">
+  If DLP scanning is slow:
+  
+  - Reduce number of patterns
+  - Simplify regex complexity
+  - Use tool-specific DLP (v1alpha2)
+  - Increase response size limits if hitting truncation
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Writing Policies" icon="file-code" href="/guides/writing-policies">
+    Integrate DLP into your policies
+  </Card>
+  <Card title="Audit Logging" icon="clipboard-list" href="/guides/audit-logging">
+    Review DLP violations
+  </Card>
+  <Card title="Policy Schema" icon="code" href="/reference/policy-schema">
+    Complete DLP configuration reference
+  </Card>
+  <Card title="Error Codes" icon="code" href="/reference/error-codes">
+    Understand DLP-related errors
+  </Card>
+</CardGroup>

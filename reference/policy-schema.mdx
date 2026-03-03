@@ -1,0 +1,908 @@
+---
+title: "Policy Schema Reference"
+description: "Complete reference for all fields in AIP policy documents including apiVersion, kind, metadata, spec, tool_rules, identity, and server configuration"
+---
+
+Complete reference for AIP policy YAML schema with all fields, types, defaults, and validation rules. This page covers both v1alpha1 and v1alpha2.
+
+<Tip>
+For a user-friendly guide to writing policies, see the [Policy Reference](/layer-2-enforcement/policy-reference). For formal specifications, see [v1alpha1](/reference/spec-v1alpha1) or [v1alpha2](/reference/spec-v1alpha2).
+</Tip>
+
+## Document Structure
+
+<Tabs>
+  <Tab title="v1alpha2 (Current)">
+    ```yaml
+    apiVersion: aip.io/v1alpha2
+    kind: AgentPolicy
+    metadata:
+      name: <string>
+      version: <string>
+      owner: <string>
+      signature: <string>
+    spec:
+      mode: <string>
+      allowed_tools: [<string>]
+      allowed_methods: [<string>]
+      denied_methods: [<string>]
+      tool_rules: [<ToolRule>]
+      protected_paths: [<string>]
+      strict_args_default: <bool>
+      dlp: <DLPConfig>
+      identity: <IdentityConfig>
+      server: <ServerConfig>
+    ```
+  </Tab>
+  
+  <Tab title="v1alpha1">
+    ```yaml
+    apiVersion: aip.io/v1alpha1
+    kind: AgentPolicy
+    metadata:
+      name: <string>
+      version: <string>
+      owner: <string>
+    spec:
+      mode: <string>
+      allowed_tools: [<string>]
+      allowed_methods: [<string>]
+      denied_methods: [<string>]
+      tool_rules: [<ToolRule>]
+      protected_paths: [<string>]
+      strict_args_default: <bool>
+      dlp: <DLPConfig>
+    ```
+  </Tab>
+</Tabs>
+
+## Top-Level Fields
+
+### apiVersion
+
+<ParamField path="apiVersion" type="string" required>
+  API version of the policy schema.
+  
+  **Valid values**:
+  - `aip.io/v1alpha1` - Original specification
+  - `aip.io/v1alpha2` - Current specification with identity and server features
+  
+  **Validation**: Implementations MUST reject documents with unknown `apiVersion`.
+</ParamField>
+
+**Example:**
+```yaml
+apiVersion: aip.io/v1alpha2
+```
+
+### kind
+
+<ParamField path="kind" type="string" required>
+  Resource kind. MUST be `AgentPolicy`.
+</ParamField>
+
+**Example:**
+```yaml
+kind: AgentPolicy
+```
+
+## metadata
+
+Policy metadata for identification and integrity verification.
+
+### metadata.name
+
+<ParamField path="metadata.name" type="string" required>
+  Unique identifier for this policy.
+  
+  **Format**: DNS-1123 subdomain (lowercase alphanumeric + hyphens)
+  - Must start and end with alphanumeric
+  - Max length: 253 characters
+  - Pattern: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+</ParamField>
+
+**Examples:**
+```yaml
+metadata:
+  name: production-agent
+  # OR
+  name: dev-env-policy
+  # OR
+  name: team-123-policy
+```
+
+### metadata.version
+
+<ParamField path="metadata.version" type="string">
+  Semantic version of the policy.
+  
+  **Format**: `MAJOR.MINOR.PATCH[-PRERELEASE]`
+  - Pattern: `^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$`
+  
+  **Use case**: Track policy changes, audit compliance.
+</ParamField>
+
+**Examples:**
+```yaml
+version: "1.0.0"
+# OR
+version: "2.1.3-beta"
+```
+
+### metadata.owner
+
+<ParamField path="metadata.owner" type="string">
+  Contact email for policy questions.
+  
+  **Format**: Valid email address
+</ParamField>
+
+**Example:**
+```yaml
+owner: security-team@company.com
+```
+
+### metadata.signature (v1alpha2)
+
+<ParamField path="metadata.signature" type="string">
+  Cryptographic signature for policy integrity verification.
+  
+  **Format**: `<algorithm>:<base64-encoded-signature>`
+  
+  **Supported algorithms**:
+  - `ed25519` - Ed25519 signature (RECOMMENDED)
+  - `ecdsa-p256` - ECDSA with P-256 curve
+  
+  **Validation**: When present, implementations MUST verify the signature before applying the policy.
+</ParamField>
+
+**Example:**
+```yaml
+signature: "ed25519:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkwYWJjZGVm"
+```
+
+## spec
+
+Policy specification defining authorization rules.
+
+### spec.mode
+
+<ParamField path="spec.mode" type="enum" default="enforce">
+  Enforcement mode for policy violations.
+  
+  **Values**:
+  - `enforce` - Block violations, return JSON-RPC error (default)
+  - `monitor` - Log violations but allow through (dry-run)
+  
+  **Use case**: Use `monitor` to test new policies before enforcement.
+</ParamField>
+
+**Example:**
+```yaml
+spec:
+  mode: enforce
+```
+
+### spec.allowed_tools
+
+<ParamField path="spec.allowed_tools" type="array">
+  Allowlist of tool names that the agent MAY invoke.
+  
+  **Item type**: String (tool name)
+  
+  **Validation**:
+  - Must be unique
+  - Minimum length: 1
+  - Subject to name normalization (NFKC, lowercase)
+  
+  **Default deny**: Tools not in this list AND not in `tool_rules` with `action: allow` are blocked.
+</ParamField>
+
+**Example:**
+```yaml
+allowed_tools:
+  - github_get_repo
+  - github_list_pulls
+  - read_file
+  - list_directory
+```
+
+### spec.allowed_methods
+
+<ParamField path="spec.allowed_methods" type="array">
+  Allowlist of JSON-RPC methods that are permitted.
+  
+  **Item type**: String (method name)
+  
+  **Default**: If not specified, implementations use a safe default list (see below).
+  
+  **Wildcard**: `*` allows all methods.
+</ParamField>
+
+**Default allowed methods:**
+```yaml
+allowed_methods:
+  - initialize
+  - initialized
+  - ping
+  - tools/call
+  - tools/list
+  - completion/complete
+  - notifications/initialized
+  - notifications/progress
+  - notifications/message
+  - notifications/resources/updated
+  - notifications/resources/list_changed
+  - notifications/tools/list_changed
+  - notifications/prompts/list_changed
+  - cancelled
+```
+
+### spec.denied_methods
+
+<ParamField path="spec.denied_methods" type="array">
+  Denylist of JSON-RPC methods that are explicitly denied.
+  
+  **Item type**: String (method name)
+  
+  **Precedence**: Denied methods take precedence over allowed methods.
+</ParamField>
+
+**Example:**
+```yaml
+denied_methods:
+  - resources/read
+  - resources/write
+  - prompts/get
+```
+
+### spec.protected_paths
+
+<ParamField path="spec.protected_paths" type="array">
+  File paths that tools MUST NOT access.
+  
+  **Item type**: String (file path)
+  
+  **Behavior**:
+  - Any tool argument containing a protected path is BLOCKED
+  - Paths are expanded (`~` → home directory)
+  - Policy file itself is automatically protected
+</ParamField>
+
+**Example:**
+```yaml
+protected_paths:
+  - ~/.ssh
+  - ~/.aws/credentials
+  - .env
+  - /etc/passwd
+```
+
+### spec.strict_args_default
+
+<ParamField path="spec.strict_args_default" type="boolean" default="false">
+  When `true`, tool rules reject any arguments not explicitly declared in `allow_args`.
+  
+  **Use case**: Enforce strict argument validation for all tools.
+</ParamField>
+
+**Example:**
+```yaml
+strict_args_default: true
+```
+
+## spec.tool_rules
+
+Fine-grained rules for individual tools.
+
+### Tool Rule Structure
+
+<Accordion title="Complete Tool Rule Schema">
+
+```yaml
+tool_rules:
+  - tool: <string>              # REQUIRED - Tool name
+    action: <string>            # OPTIONAL - allow|block|ask (default: allow)
+    rate_limit: <string>        # OPTIONAL - e.g., "10/minute"
+    strict_args: <bool>         # OPTIONAL - Override strict_args_default
+    schema_hash: <string>       # OPTIONAL - Tool schema integrity (v1alpha2)
+    allow_args:                 # OPTIONAL - Argument validation
+      <arg_name>: <regex>
+```
+
+</Accordion>
+
+### tool_rules[].tool
+
+<ParamField path="tool_rules[].tool" type="string" required>
+  Tool name this rule applies to.
+  
+  **Validation**: Subject to name normalization (NFKC, lowercase).
+</ParamField>
+
+**Example:**
+```yaml
+tool_rules:
+  - tool: read_file
+```
+
+### tool_rules[].action
+
+<ParamField path="tool_rules[].action" type="enum" default="allow">
+  Action to take when this tool is invoked.
+  
+  **Values**:
+  - `allow` - Permit (subject to `allow_args` validation)
+  - `block` - Deny unconditionally
+  - `ask` - Require interactive user approval
+</ParamField>
+
+**Examples:**
+```yaml
+# Block destructive operations
+- tool: delete_file
+  action: block
+
+# Require approval for sensitive operations
+- tool: run_training
+  action: ask
+
+# Allow with argument validation
+- tool: exec_command
+  action: allow
+  allow_args:
+    command: "^(ls|cat|echo|pwd)\s.*"
+```
+
+### tool_rules[].rate_limit
+
+<ParamField path="tool_rules[].rate_limit" type="string">
+  Rate limiting for this tool.
+  
+  **Format**: `<count>/<period>`
+  
+  **Periods**:
+  - `second` (aliases: `sec`, `s`)
+  - `minute` (aliases: `min`, `m`)
+  - `hour` (aliases: `hr`, `h`)
+  
+  **Algorithm**: Implementation-defined (token bucket, sliding window, etc.)
+</ParamField>
+
+**Examples:**
+```yaml
+- tool: list_gpus
+  rate_limit: "10/minute"
+
+- tool: search_files
+  rate_limit: "100/hour"
+
+- tool: api_request
+  rate_limit: "5/second"
+```
+
+### tool_rules[].strict_args
+
+<ParamField path="tool_rules[].strict_args" type="boolean">
+  Override `spec.strict_args_default` for this specific tool.
+  
+  When `true`, reject any arguments not declared in `allow_args`.
+</ParamField>
+
+**Example:**
+```yaml
+- tool: postgres_query
+  strict_args: true
+  allow_args:
+    query: "^SELECT\s+.*"  # Only SELECT queries
+    # Any other argument will be rejected
+```
+
+### tool_rules[].schema_hash (v1alpha2)
+
+<ParamField path="tool_rules[].schema_hash" type="string">
+  Cryptographic hash of the tool's MCP schema for integrity verification.
+  
+  **Format**: `<algorithm>:<hex-digest>`
+  
+  **Algorithms**:
+  - `sha256` (RECOMMENDED)
+  - `sha384`
+  - `sha512`
+  
+  **Use case**: Prevent tool poisoning attacks by verifying the tool definition hasn't changed.
+</ParamField>
+
+**Example:**
+```yaml
+- tool: read_file
+  schema_hash: "sha256:a3c7f2e8d9b4f1e2c8a7d6f3e9b2c4f1a8e7d3c2b5f4e9a7c3d8f2b6e1a9c4f7"
+```
+
+**Generating schema hashes:**
+```bash
+# Using AIP CLI
+aip-proxy schema-hash --server mcp://localhost:8080 --tool read_file
+```
+
+### tool_rules[].allow_args
+
+<ParamField path="tool_rules[].allow_args" type="object">
+  Argument validation using regex patterns.
+  
+  **Format**: Map of argument name → regex pattern
+  
+  **Behavior**:
+  - All arguments in this map MUST be present in the request
+  - Argument values MUST match their regex pattern
+  - Missing or non-matching arguments result in BLOCK
+  
+  **Regex engine**: MUST support RE2 semantics (linear-time guarantees)
+</ParamField>
+
+**Examples:**
+```yaml
+allow_args:
+  # Constrain URLs to GitHub only
+  url: "^https://github\.com/.*"
+  
+  # Allow only SELECT queries
+  query: "^SELECT\s+.*"
+  
+  # Restrict file paths to home directory
+  path: "^/home/.*"
+  
+  # Validate email format
+  email: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+```
+
+**String conversion**: Non-string argument values are converted before matching:
+- String → as-is
+- Number → decimal representation
+- Boolean → "true" or "false"
+- Null → empty string
+- Array/Object → JSON serialization
+
+## spec.dlp
+
+Data Loss Prevention configuration for scanning and redacting sensitive data.
+
+<Accordion title="Complete DLP Schema">
+
+<Tabs>
+  <Tab title="v1alpha2">
+    ```yaml
+    dlp:
+      enabled: <bool>             # default: true when dlp block present
+      scan_requests: <bool>       # default: false
+      scan_responses: <bool>      # default: true
+      detect_encoding: <bool>     # default: false
+      filter_stderr: <bool>       # default: false
+      max_scan_size: <string>     # default: "1MB"
+      on_request_match: <string>  # default: "block"
+      patterns:
+        - name: <string>
+          regex: <string>
+          scope: <string>         # default: "all"
+    ```
+  </Tab>
+  
+  <Tab title="v1alpha1">
+    ```yaml
+    dlp:
+      enabled: <bool>             # default: true when dlp block present
+      detect_encoding: <bool>     # default: false
+      filter_stderr: <bool>       # default: false
+      patterns:
+        - name: <string>
+          regex: <string>
+    ```
+  </Tab>
+</Tabs>
+
+</Accordion>
+
+### dlp.enabled
+
+<ParamField path="dlp.enabled" type="boolean" default="true">
+  Enable DLP scanning.
+  
+  **Default**: `true` when `dlp` block is present
+</ParamField>
+
+### dlp.scan_requests (v1alpha2)
+
+<ParamField path="dlp.scan_requests" type="boolean" default="false">
+  Scan tool arguments for sensitive data before forwarding to MCP server.
+  
+  **Use case**: Prevent data exfiltration via arguments (e.g., embedding secrets in API queries).
+</ParamField>
+
+### dlp.scan_responses
+
+<ParamField path="dlp.scan_responses" type="boolean" default="true">
+  Scan tool responses for sensitive data.
+  
+  **Use case**: Standard DLP to prevent PII/secrets from reaching the agent.
+</ParamField>
+
+### dlp.max_scan_size (v1alpha2)
+
+<ParamField path="dlp.max_scan_size" type="string" default="1MB">
+  Maximum size of content to scan per request/response.
+  
+  **Format**: Size string (e.g., `"1MB"`, `"512KB"`, `"10MB"`)
+  
+  **Purpose**: Prevents ReDoS and memory exhaustion on large payloads.
+  
+  **Behavior**: Content exceeding this limit is truncated for scanning, and a warning is logged.
+</ParamField>
+
+### dlp.on_request_match (v1alpha2)
+
+<ParamField path="dlp.on_request_match" type="enum" default="block">
+  Action when DLP pattern matches in a request (requires `scan_requests: true`).
+  
+  **Values**:
+  - `block` - Reject the request with error -32001 (default)
+  - `redact` - Replace matched content and forward
+  - `warn` - Log warning and forward unchanged
+</ParamField>
+
+### dlp.patterns
+
+<ParamField path="dlp.patterns" type="array" required>
+  List of DLP detection patterns.
+  
+  **Item type**: Pattern object with `name` and `regex`
+</ParamField>
+
+#### dlp.patterns[].name
+
+<ParamField path="dlp.patterns[].name" type="string" required>
+  Human-readable identifier for this pattern.
+  
+  **Use case**: Appears in audit logs and redaction markers.
+</ParamField>
+
+#### dlp.patterns[].regex
+
+<ParamField path="dlp.patterns[].regex" type="string" required>
+  Regular expression to detect sensitive data.
+  
+  **Regex engine**: MUST support RE2 semantics (linear-time guarantees)
+</ParamField>
+
+#### dlp.patterns[].scope (v1alpha2)
+
+<ParamField path="dlp.patterns[].scope" type="enum" default="all">
+  Where to apply this pattern.
+  
+  **Values**:
+  - `all` - Scan both requests and responses (default)
+  - `request` - Only scan requests (detect exfiltration attempts)
+  - `response` - Only scan responses (PII protection)
+</ParamField>
+
+**Example patterns:**
+```yaml
+dlp:
+  scan_requests: true
+  patterns:
+    # API Keys
+    - name: "AWS Key"
+      regex: "(A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}"
+      scope: "all"
+    
+    - name: "GitHub Token"
+      regex: "ghp_[a-zA-Z0-9]{36}"
+      scope: "all"
+    
+    # PII (response-only)
+    - name: "Email"
+      regex: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+      scope: "response"
+    
+    - name: "SSN"
+      regex: "\b\d{3}-\d{2}-\d{4}\b"
+      scope: "response"
+    
+    # Injection detection (request-only)
+    - name: "SQL Injection"
+      regex: "(?i)(DROP|DELETE|TRUNCATE)\s+TABLE"
+      scope: "request"
+```
+
+**Redaction format**: Matched content is replaced with:
+```
+[REDACTED:<name>]
+```
+
+Example:
+```
+Before: "Connect with: AKIAIOSFODNN7EXAMPLE"
+After:  "Connect with: [REDACTED:AWS Key]"
+```
+
+## spec.identity (v1alpha2)
+
+Agent identity and session management configuration.
+
+<Accordion title="Complete Identity Schema">
+
+```yaml
+identity:
+  enabled: <bool>           # default: false
+  token_ttl: <duration>     # default: "5m"
+  rotation_interval: <duration>  # default: "4m"
+  require_token: <bool>     # default: false
+  session_binding: <string> # default: "process"
+  nonce_window: <duration>  # default: equals token_ttl
+  policy_transition_grace: <duration>  # default: "0s"
+  audience: <string>        # default: metadata.name
+  nonce_storage:            # optional
+    type: <string>          # default: "memory"
+    address: <string>
+    key_prefix: <string>    # default: "aip:nonce:"
+    clock_skew_tolerance: <duration>  # default: "30s"
+  keys:                     # optional
+    signing_algorithm: <string>  # default: "ES256"
+    key_source: <string>    # default: "generate"
+    key_path: <string>
+    rotation_period: <duration>  # default: "7d"
+```
+
+</Accordion>
+
+### identity.enabled
+
+<ParamField path="identity.enabled" type="boolean" default="false">
+  Enable identity token generation and management.
+</ParamField>
+
+### identity.token_ttl
+
+<ParamField path="identity.token_ttl" type="duration" default="5m">
+  Token time-to-live.
+  
+  **Format**: Go duration string (e.g., `"5m"`, `"1h"`, `"300s"`)
+  
+  **Recommendation**: Use short TTLs (5-15 minutes) to limit token theft window.
+</ParamField>
+
+### identity.rotation_interval
+
+<ParamField path="identity.rotation_interval" type="duration" default="4m">
+  How often to rotate tokens before expiry.
+  
+  **Constraint**: MUST be less than `token_ttl`
+  
+  **Recommendation**: Leave 1-2 minute grace period for in-flight requests.
+</ParamField>
+
+### identity.require_token
+
+<ParamField path="identity.require_token" type="boolean" default="false">
+  Require valid identity token for all tool calls.
+  
+  **Error code**: Requests without tokens are rejected with -32008.
+  
+  **Use case**: Gradual rollout - start with `false` to generate tokens without enforcement.
+</ParamField>
+
+### identity.session_binding
+
+<ParamField path="identity.session_binding" type="enum" default="process">
+  Context bound to session identity.
+  
+  **Values**:
+  - `process` - Bind to OS process ID (default)
+  - `policy` - Bind to policy hash
+  - `strict` - Bind to process + policy + hostname
+  
+  **Use case**:
+  - `process`: Single-machine, local agents
+  - `policy`: Distributed agents sharing policy
+  - `strict`: High security, non-ephemeral environments
+</ParamField>
+
+### identity.audience
+
+<ParamField path="identity.audience" type="string">
+  Intended audience for identity tokens (JWT `aud` claim).
+  
+  **Default**: Value of `metadata.name`
+  
+  **Format**: URI string identifying the MCP server or service
+  
+  **Purpose**: Prevents tokens issued for one MCP server from being accepted by another.
+</ParamField>
+
+**Example:**
+```yaml
+identity:
+  enabled: true
+  audience: "https://mcp.example.com/api"
+```
+
+### identity.nonce_storage
+
+Distributed nonce storage configuration for multi-instance deployments.
+
+<ParamField path="identity.nonce_storage.type" type="enum" default="memory">
+  Storage backend for nonces.
+  
+  **Values**:
+  - `memory` - In-memory sync.Map (single-instance only)
+  - `redis` - Redis cluster (RECOMMENDED for production)
+  - `postgres` - PostgreSQL database
+</ParamField>
+
+<ParamField path="identity.nonce_storage.address" type="string">
+  Connection string for external storage.
+  
+  **Required**: When `type` is `redis` or `postgres`
+</ParamField>
+
+**Examples:**
+```yaml
+# Redis cluster
+identity:
+  nonce_storage:
+    type: "redis"
+    address: "redis://redis-cluster:6379"
+    key_prefix: "prod:aip:nonce:"
+
+# PostgreSQL
+identity:
+  nonce_storage:
+    type: "postgres"
+    address: "postgres://user:pass@db:5432/aip?sslmode=require"
+```
+
+<Warning>
+Using `type: "memory"` with multiple AIP instances is a **security vulnerability** that allows cross-instance replay attacks.
+</Warning>
+
+## spec.server (v1alpha2)
+
+HTTP server for remote validation endpoints.
+
+<Accordion title="Complete Server Schema">
+
+```yaml
+server:
+  enabled: <bool>           # default: false
+  listen: <string>          # default: "127.0.0.1:9443"
+  failover_mode: <string>   # default: "fail_closed"
+  timeout: <duration>       # default: "5s"
+  tls:
+    cert: <string>
+    key: <string>
+  endpoints:
+    validate: <string>      # default: "/v1/validate"
+    revoke: <string>        # default: "/v1/revoke"
+    jwks: <string>          # default: "/v1/jwks"
+    health: <string>        # default: "/health"
+    metrics: <string>       # default: "/metrics"
+```
+
+</Accordion>
+
+### server.enabled
+
+<ParamField path="server.enabled" type="boolean" default="false">
+  Enable HTTP server for remote validation.
+</ParamField>
+
+### server.listen
+
+<ParamField path="server.listen" type="string" default="127.0.0.1:9443">
+  Address and port to bind the HTTP server.
+  
+  **Format**: `<host>:<port>` or `:<port>`
+</ParamField>
+
+<Warning>
+Binding to `0.0.0.0` exposes the validation endpoint to the network. Implementations MUST require TLS when listen address is not localhost.
+</Warning>
+
+### server.failover_mode
+
+<ParamField path="server.failover_mode" type="enum" default="fail_closed">
+  Behavior when validation server is unreachable.
+  
+  **Values**:
+  - `fail_closed` - Deny all requests (RECOMMENDED for production)
+  - `fail_open` - Allow all requests (NOT RECOMMENDED)
+  - `local_policy` - Fall back to local policy evaluation (RECOMMENDED for hybrid)
+</ParamField>
+
+### server.timeout
+
+<ParamField path="server.timeout" type="duration" default="5s">
+  Maximum time to wait for validation server response.
+  
+  After timeout, `failover_mode` behavior is triggered.
+</ParamField>
+
+### server.tls
+
+TLS configuration for HTTPS.
+
+<ParamField path="server.tls.cert" type="string">
+  Path to TLS certificate (PEM format).
+  
+  **Required**: When `listen` is not localhost
+</ParamField>
+
+<ParamField path="server.tls.key" type="string">
+  Path to TLS private key (PEM format).
+  
+  **Required**: When `listen` is not localhost
+</ParamField>
+
+**Example:**
+```yaml
+server:
+  enabled: true
+  listen: "0.0.0.0:9443"
+  tls:
+    cert: "/etc/aip/tls/cert.pem"
+    key: "/etc/aip/tls/key.pem"
+```
+
+## JSON Schema Validation
+
+Validate your policy file against the JSON Schema:
+
+<CodeGroup>
+```bash v1alpha2
+# Using ajv-cli
+npm install -g ajv-cli
+ajv validate -s spec/schema/agent-policy-v1alpha2.schema.json -d policy.yaml
+
+# Using Python jsonschema
+pip install jsonschema pyyaml
+python -c "
+import yaml, jsonschema, json
+schema = json.load(open('spec/schema/agent-policy-v1alpha2.schema.json'))
+policy = yaml.safe_load(open('policy.yaml'))
+jsonschema.validate(policy, schema)
+print('Valid!')
+"
+```
+
+```bash v1alpha1
+# Using ajv-cli
+ajv validate -s spec/schema/agent-policy.schema.json -d policy.yaml
+
+# Using Python jsonschema
+python -c "
+import yaml, jsonschema, json
+schema = json.load(open('spec/schema/agent-policy.schema.json'))
+policy = yaml.safe_load(open('policy.yaml'))
+jsonschema.validate(policy, schema)
+print('Valid!')
+"
+```
+</CodeGroup>
+
+## Common Validation Errors
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `invalid apiVersion` | Wrong API version | Use `aip.io/v1alpha1` or `aip.io/v1alpha2` |
+| `empty allowed_tools` | No tools specified | Add tools or tool_rules |
+| `invalid regex in allow_args` | Bad regex pattern | Validate regex syntax (RE2) |
+| `invalid rate_limit format` | Wrong rate limit format | Use `<N>/<period>` |
+| `rotation_interval >= token_ttl` | Rotation must happen before expiry | Reduce rotation_interval |
+| `missing metadata.name` | Required field missing | Add unique policy name |
+
+## See Also
+
+- [Policy Reference](/layer-2-enforcement/policy-reference) - User-friendly guide
+- [v1alpha1 Specification](/reference/spec-v1alpha1) - Formal v1alpha1 spec
+- [v1alpha2 Specification](/reference/spec-v1alpha2) - Formal v1alpha2 spec
+- [JSON Schema (v1alpha2)](https://github.com/ArangoGutierrez/agent-identity-protocol/blob/main/spec/schema/agent-policy-v1alpha2.schema.json)
+- [JSON Schema (v1alpha1)](https://github.com/ArangoGutierrez/agent-identity-protocol/blob/main/spec/schema/agent-policy.schema.json)

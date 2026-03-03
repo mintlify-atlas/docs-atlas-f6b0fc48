@@ -1,0 +1,226 @@
+---
+title: "Contributing to AIP"
+description: "Guidelines for contributing to the Agent Identity Protocol project"
+---
+
+Thank you for your interest in contributing to AIP. This project aims to establish a zero-trust identity standard for autonomous AI agents.
+
+## Ways to Contribute
+
+<CardGroup cols={2}>
+  <Card title="Security Researchers" icon="shield-halved">
+    - Threat modeling and attack surface analysis
+    - Penetration testing of reference implementations
+    - Review of cryptographic choices and identity flows
+  </Card>
+  
+  <Card title="Platform Engineers" icon="server">
+    - Kubernetes operators and sidecar implementations
+    - Cloud provider integrations (AWS, GCP, Azure)
+    - Service mesh integrations (Istio, Linkerd)
+  </Card>
+  
+  <Card title="AI/ML Engineers" icon="brain">
+    - Agent framework integrations (LangChain, AutoGPT, CrewAI)
+    - MCP transport implementations
+    - SDK development (Python, TypeScript, Go)
+  </Card>
+  
+  <Card title="Compliance Teams" icon="scale-balanced">
+    - Regulatory mapping (SOC2, GDPR, HIPAA, FedRAMP)
+    - Audit log schema standardization
+    - Policy template libraries
+  </Card>
+</CardGroup>
+
+## Getting Started
+
+### Prerequisites
+
+Before you begin development, ensure you have the following installed:
+
+- **Go 1.21+** (for proxy development)
+- **Python 3.11+** (for SDK and examples)
+- **Node.js 20+** (for TypeScript SDK)
+
+### Development Setup
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/ArangoGutierrez/agent-identity-protocol.git
+    cd agent-identity-protocol
+    ```
+  </Step>
+  
+  <Step title="Set up Go proxy development">
+    ```bash
+    cd proxy
+    go mod download
+    go build ./...
+    ```
+  </Step>
+  
+  <Step title="Set up Python SDK">
+    ```bash
+    cd sdk/python
+    pip install -e ".[dev]"
+    ```
+  </Step>
+  
+  <Step title="Set up TypeScript SDK">
+    ```bash
+    cd sdk/typescript
+    npm install
+    npm run build
+    ```
+  </Step>
+</Steps>
+
+## Contribution Process
+
+<Steps>
+  <Step title="Issues First">
+    Before starting work, please:
+    - Check existing issues for duplicates
+    - Open an issue describing what you want to work on
+    - Wait for maintainer feedback on approach
+    
+    <Note>
+      This helps avoid duplicate work and ensures your contribution aligns with project goals.
+    </Note>
+  </Step>
+  
+  <Step title="Branch Naming">
+    Follow these conventions for branch names:
+    
+    ```
+    feat/short-description    # New features
+    fix/issue-number          # Bug fixes
+    docs/what-changed         # Documentation
+    spec/proposal-name        # Specification changes
+    ```
+  </Step>
+  
+  <Step title="Commit Messages">
+    Follow [Conventional Commits](https://www.conventionalcommits.org/):
+    
+    ```
+    feat: add OIDC token validation to proxy
+    fix: handle empty manifest gracefully
+    docs: clarify egress filtering behavior
+    spec: add delegation token schema
+    ```
+  </Step>
+  
+  <Step title="Pull Requests">
+    - Fill out the PR template completely
+    - Ensure CI passes (lint, test, build)
+    - Request review from relevant CODEOWNERS
+    - Squash commits before merge
+  </Step>
+</Steps>
+
+## Specification Changes
+
+Changes to the AIP specification (`spec/`) require additional review:
+
+<Steps>
+  <Step title="RFC Process">
+    Open an issue with `[RFC]` prefix describing the proposed change
+  </Step>
+  
+  <Step title="Discussion Period">
+    Minimum 2 weeks for community feedback
+  </Step>
+  
+  <Step title="Consensus">
+    Approval from at least 2 maintainers required
+  </Step>
+  
+  <Step title="Backward Compatibility">
+    Document migration path if the change is breaking
+  </Step>
+</Steps>
+
+<Warning>
+  Specification changes impact all implementations. They require careful consideration and broad consensus.
+</Warning>
+
+## Code Style
+
+Ensure your code follows our style guidelines:
+
+<CodeGroup>
+```bash Go
+gofmt -s -w .
+go vet ./...
+golangci-lint run
+```
+
+```bash Python
+ruff check .
+ruff format .
+mypy .
+```
+
+```bash TypeScript
+npm run lint
+npm run typecheck
+```
+</CodeGroup>
+
+## Testing
+
+All code changes require tests:
+
+<CodeGroup>
+```bash Go
+go test -race -cover ./...
+```
+
+```bash Python
+pytest --cov=aip
+```
+
+```bash TypeScript
+npm test
+```
+</CodeGroup>
+
+<Note>
+  Pull requests without tests will not be merged. Aim for meaningful test coverage, not just high percentages.
+</Note>
+
+## Documentation
+
+Good documentation is crucial for adoption:
+
+- Code should be self-documenting with clear names
+- Public APIs require doc comments
+- Complex logic needs inline comments explaining "why"
+- User-facing changes need README/docs updates
+
+## Code of Conduct
+
+We follow the [Contributor Covenant v2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
+
+**TL;DR**: Be respectful, inclusive, and professional. Focus on the work, not the person.
+
+See our full [Code of Conduct](/community/code-of-conduct) for details.
+
+## License
+
+By contributing to AIP, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/ArangoGutierrez/agent-identity-protocol/blob/main/LICENSE).
+
+## Questions?
+
+Need help getting started?
+
+- **GitHub Discussions**: Architecture and design questions
+- **GitHub Issues**: Bug reports and feature requests
+- **Security Issues**: See [Security Policy](/community/security-policy)
+
+---
+
+Thank you for helping make AI agents safer and more accountable.
